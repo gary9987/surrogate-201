@@ -16,33 +16,26 @@ if __name__ == '__main__':
 
     final = []
 
+    metrics = [
+        'train-accuracy',
+        'train-loss',
+        'valid-accuracy',
+        'valid-loss',
+        'test-accuracy',
+        'test-loss'
+    ]
+
     for idx in range(len(api)):
         print('start model NO. {}'.format(idx))
-        record = {}
+        record = {metric: [] for metric in metrics}
+
         arch = api.query_meta_info_by_index(idx)
         total_train_epo = arch.get_total_epoch('cifar10-valid')  # 12 for cifar10 training
 
-        for epoch in total_train_epo:
-            info = api.get_more_info(idx, 'cifar10', iepoch=epoch)
-            validation_accuracy, latency, time_cost, current_total_time_cost = api.simulate_train_eval(idx,
-                                                                                                       dataset='cifar10',
-                                                                                                       iepoch=epoch)
-            info['train-loss']
-            info['test-loss']
-            info['test-accuracy']
-            info['train-accuracy']
-
-        train_met = arch.get_metrics('cifar10-valid', 'train')
-        record['train_accuracy'] = train_met['accuracy']
-        record['train_loss'] = train_met['loss']
-
-        valid_met = arch.get_metrics('cifar10-valid', 'x-valid')
-        record['valid_accuracy'] = valid_met['accuracy']
-        record['valid_loss'] = valid_met['loss']
-
-        test_met = arch.get_metrics('cifar10-valid', 'ori-test')
-        record['test_accuracy'] = test_met['accuracy']
-        record['test_loss'] = test_met['loss']
+        for epoch in range(total_train_epo):
+            info = api.get_more_info(idx, 'cifar10-valid', iepoch=epoch)
+            for metric in metrics:
+                record[metric].append(info[metric])
 
         arch_str = api.query_info_str_by_arch(idx).split('\n')[0]
         tmp_list = api.str2lists(arch_str)
