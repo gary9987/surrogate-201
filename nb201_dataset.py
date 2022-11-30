@@ -1,21 +1,32 @@
 import logging
-import random
 from spektral.data import Dataset, Graph
 import pickle
 import numpy as np
-import tensorflow as tf
-from tensorflow.python.framework.convert_to_constants import convert_variables_to_constants_v2_as_graph
 import os
-import wget
-from os import path
-import re
-import hashlib
-from keras import backend as K
-from tensorflow.python.profiler.option_builder import ProfileOptionBuilder
-from tensorflow.python.profiler.model_analyzer import profile
-import csv
 
 logger = logging.getLogger(__name__)
+
+
+def train_valid_test_split_dataset(data, ratio=[0.8, 0.1, 0.1]):
+    assert sum(ratio) <= 1.
+    idxs = np.random.permutation(len(data))
+    ret = {}
+
+    if len(ratio) == 2:
+        split_va = int(ratio[0] * len(data))
+        idx_tr, idx_va = np.split(idxs, [split_va])
+        ret['train'] = data[idx_tr]
+        ret['valid'] = data[idx_va]
+    elif len(ratio) == 3:
+        split_va, split_te = int(ratio[0] * len(data)), int((ratio[0] + ratio[1]) * len(data))
+        idx_tr, idx_va, idx_te = np.split(idxs, [split_va, split_te])
+        ret['train'] = data[idx_tr]
+        ret['valid'] = data[idx_va]
+        ret['test'] = data[idx_te]
+    else:
+        raise ValueError('len(ratio) should be 2 or 3')
+
+    return ret
 
 
 def transform_nb201_to_graph(records: dict):
@@ -45,7 +56,7 @@ def transform_nb201_to_graph(records: dict):
             x[i][features_dict[ops[i]]] = 1
 
         # Adjacency matrix A
-        adj_matrix = np.array(matrix)
+        adj_matrix = np.array(matrix).astype(float)
 
 
         filename = os.path.join(file_path, f'graph_{no}.npz')
@@ -96,6 +107,6 @@ if __name__ == '__main__':
         records = pickle.load(f)
 
     print(len(records)) # 15625
-    #transform_nb201_to_graph(records)
+    transform_nb201_to_graph(records)
     datasets = NasBench201Dataset(0, 15355)
     print(datasets)
