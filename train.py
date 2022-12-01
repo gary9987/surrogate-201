@@ -29,7 +29,10 @@ if __name__ == '__main__':
     model = Graph_Model(n_hidden, mlp_hidden, model_activation, label_epochs, model_dropout)
 
     datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624),
-                                              ratio=[0.8, 0.1, 0.1])
+                                              ratio=[0.8, 0.1, 0.1],
+                                              shuffle=True,
+                                              shuffle_seed=0)
+    
     for key in datasets:
         datasets[key].apply(ReshapeYTransform())
 

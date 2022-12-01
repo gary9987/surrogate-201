@@ -7,9 +7,13 @@ import os
 logger = logging.getLogger(__name__)
 
 
-def train_valid_test_split_dataset(data, ratio=[0.8, 0.1, 0.1]):
+def train_valid_test_split_dataset(data, ratio=[0.8, 0.1, 0.1], shuffle=False, shuffle_seed=0):
     assert sum(ratio) <= 1.
-    idxs = np.random.permutation(len(data))
+    if shuffle:
+        np.random.seed(shuffle_seed)
+        idxs = np.random.permutation(len(data))
+    else:
+        idxs = np.array([i for i in range(len(data))])
     ret = {}
 
     if len(ratio) == 2:
