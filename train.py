@@ -8,6 +8,7 @@ from nb201_dataset import NasBench201Dataset, train_valid_test_split_dataset
 from spektral.data import BatchLoader
 
 
+logging.basicConfig(filename='train.log', level=logging.INFO, force=True, filemode='w')
 logger = logging.getLogger(__name__)
 handler = logging.StreamHandler(sys.stdout)
 handler.setLevel(logging.INFO)
@@ -32,7 +33,7 @@ if __name__ == '__main__':
                                               ratio=[0.8, 0.1, 0.1],
                                               shuffle=True,
                                               shuffle_seed=0)
-    
+
     for key in datasets:
         datasets[key].apply(ReshapeYTransform())
 
