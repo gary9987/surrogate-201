@@ -24,7 +24,13 @@ if __name__ == '__main__':
 
     test_loader = BatchLoader(datasets['test'], batch_size=128, shuffle=False, epochs=1)
     loss = model.evaluate(test_loader.load(), steps=test_loader.steps_per_epoch)
-    logging.info(f'Test loss: {loss}')
+    logging.info(f'MSE loss: {loss}')
+
+    model.compile('adam', 'mae')
+    test_loader = BatchLoader(datasets['test'], batch_size=128, shuffle=False, epochs=1)
+    loss = model.evaluate(test_loader.load(), steps=test_loader.steps_per_epoch)
+    logging.info(f'MAE loss: {loss}')
+
 
     test_loader = BatchLoader(datasets['test'], batch_size=128, shuffle=False, epochs=1)
 

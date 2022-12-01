@@ -39,7 +39,7 @@ if __name__ == '__main__':
 
     model.compile('adam', 'mse')
 
-    loader = {key: BatchLoader(datasets[key], batch_size=batch_size, shuffle=True) for key in datasets}
+    loader = {key: BatchLoader(datasets[key], batch_size=batch_size, shuffle=True if key != 'test' else False) for key in datasets}
     model.fit(loader['train'].load(), steps_per_epoch=loader['train'].steps_per_epoch,
               validation_data=loader['valid'].load(), validation_steps=loader['valid'].steps_per_epoch,
               epochs=train_epochs,
