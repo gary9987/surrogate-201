@@ -18,13 +18,13 @@ logger.addHandler(handler)
 
 
 if __name__ == '__main__':
-    n_hidden = 256
+    n_hidden = 256 * 12
     mlp_hidden = [64, 64, 64, 64]
     model_activation = 'relu'
-    model_dropout = 0.0
+    model_dropout = 0.1
     label_epochs = 12
     batch_size = 16
-    train_epochs = 100
+    train_epochs = 150
     patience = 20
 
     model = Graph_Model(n_hidden, mlp_hidden, model_activation, label_epochs, model_dropout)
@@ -53,7 +53,12 @@ if __name__ == '__main__':
     logger.info('Test loss: {}'.format(loss))
 
     test_loader = BatchLoader(datasets['test'], batch_size=batch_size, shuffle=False, epochs=1)
+
+    cot = 0
     for data in test_loader:
         pred = model.predict(data[0])
         for i, j in zip(data[1], pred):
-            logger.info(f'{i} {j}')
+            logger.info(f'{cot}')
+            cot += 1
+            for ep in range(0, 35, 12):
+                logger.info(f'\n{i[ep: ep + 12]}\n{j[ep: ep + 12]}')
