@@ -21,9 +21,12 @@ if __name__ == '__main__':
         datasets[key].apply(ReshapeYTransform())
 
     test_loader = BatchLoader(datasets['test'], batch_size=128, shuffle=False, epochs=1)
+
+    cot = 0
     for data in test_loader:
         pred = model.predict(data[0])
         for i, j in zip(data[1], pred):
-            logging.info('\n')
+            logging.info(f'{cot}')
+            cot += 1
             for ep in range(0, 35, 12):
                 logging.info(f'\n{i[ep: ep+12]}\n{j[ep: ep+12]}')
