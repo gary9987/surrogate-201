@@ -4,6 +4,11 @@ import numpy as np
 
 
 if __name__ == '__main__':
+    hp = '12' # can be 12 or 200 for cifar-10
+    # For hp=12 seed={111, 777}
+    # For hp=200 seed={777, 888, 999}
+
+    is_random = 111
     api = create(None, 'tss', fast_mode=True, verbose=False)
     # Create the API instance for the topology search space in NATS
     template_array = np.zeros((8, 8), dtype=int)
@@ -29,11 +34,11 @@ if __name__ == '__main__':
         print('start model NO. {}'.format(idx))
         record = {metric: [] for metric in metrics}
 
-        arch = api.query_meta_info_by_index(idx)
+        arch = api.query_meta_info_by_index(idx, hp=hp)
         total_train_epo = arch.get_total_epoch('cifar10-valid')  # 12 for cifar10 training
 
         for epoch in range(total_train_epo):
-            info = api.get_more_info(idx, 'cifar10-valid', iepoch=epoch)
+            info = api.get_more_info(idx, 'cifar10-valid', iepoch=epoch, hp=hp, is_random=is_random)
             for metric in metrics:
                 record[metric].append(info[metric])
 
