@@ -1,4 +1,6 @@
 import logging
+from pathlib import Path
+
 from spektral.data import Dataset, Graph
 import pickle
 import numpy as np
@@ -33,16 +35,13 @@ def train_valid_test_split_dataset(data, ratio=[0.8, 0.1, 0.1], shuffle=False, s
     return ret
 
 
-def transform_nb201_to_graph(records: dict):
+def transform_nb201_to_graph(records: dict, hp: str, seed: int):
     features_dict = {'INPUT': 0, 'none': 1, 'skip_connect': 2, 'nor_conv_1x1': 3, 'nor_conv_3x3': 4,
                      'avg_pool_3x3': 5, 'OUTPUT': 6}
 
     num_features = len(features_dict)
-    file_path = 'NasBench201Dataset'
-
-    if not os.path.exists(file_path):
-        os.mkdir(file_path)
-
+    file_path = f'NasBench201Dataset_hp{hp}_seed{seed}'
+    Path(file_path).mkdir(exist_ok=True)
 
     for record, no in zip(records, range(len(records))):
 
@@ -50,8 +49,11 @@ def transform_nb201_to_graph(records: dict):
         nodes = matrix.shape[0]
 
         # Labels Y
-        y = np.zeros((3, 12))  # (train_accuracy, validation_accuracy, test_accuracy) * epoch(12)
-        for i, j in enumerate(['train-accuracy', 'valid-accuracy', 'test-accuracy']):
+        y = np.zeros((3, int(hp)))  # (train_accuracy, validation_accuracy, test_accuracy) * epoch(12)
+        metrics_list = ['train-accuracy', 'valid-accuracy']
+        if hp == '12':
+            metrics_list.append('test-accuracy')
+        for i, j in enumerate(metrics_list):
             y[i] = np.array(metrics[j])
 
         # Node features X
@@ -70,8 +72,8 @@ def transform_nb201_to_graph(records: dict):
 
 
 class NasBench201Dataset(Dataset):
-    def __init__(self, start: int, end: int, **kwargs):
-        self.file_path = 'NasBench201Dataset'
+    def __init__(self, start: int, end: int, hp: str, seed: int, **kwargs):
+        self.file_path = f'NasBench201Dataset_hp{hp}_seed{seed}'
         self.start = start
         self.end = end
         super().__init__(**kwargs)
@@ -107,10 +109,13 @@ class NasBench201Dataset(Dataset):
 
 
 if __name__ == '__main__':
-    with open('model_label.pkl', 'rb') as f:
-        records = pickle.load(f)
+    for seed in [777, 888]:
+        output_dir = 'nb201_query_data'
+        filename = f'hp200_seed{seed}.pkl'
+        with open(os.path.join(output_dir, filename), 'rb') as f:
+            records = pickle.load(f)
 
-    print(len(records)) # 15625
-    transform_nb201_to_graph(records)
-    datasets = NasBench201Dataset(0, 15355)
-    print(datasets)
+        print(len(records))  # 15625
+        transform_nb201_to_graph(records, hp='200', seed=seed)
+        datasets = NasBench201Dataset(0, 15355, hp='200', seed=seed)
+        print(datasets)

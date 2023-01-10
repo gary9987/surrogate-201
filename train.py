@@ -23,14 +23,14 @@ if __name__ == '__main__':
     mlp_hidden = [64, 64, 64, 64]
     model_activation = 'relu'
     model_dropout = 0.1
-    label_epochs = 12
+    label_epochs = 200
     batch_size = 16
     train_epochs = 150
     patience = 20
 
     model = Graph_Model(n_hidden, mlp_hidden, model_activation, label_epochs, model_dropout)
 
-    datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624),
+    datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, hp=str(label_epochs), seed=777),
                                               ratio=[0.8, 0.1, 0.1],
                                               shuffle=True,
                                               shuffle_seed=0)
