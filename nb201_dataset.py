@@ -109,13 +109,20 @@ class NasBench201Dataset(Dataset):
 
 
 if __name__ == '__main__':
-    for seed in [777, 888]:
+    hp = '12' # hp = 12 or 200
+
+    if hp == '12':
+        seed_list = [111, 777]
+    elif hp == '200':
+        seed_list = [777, 888] # 999
+
+    for seed in seed_list:
         output_dir = 'nb201_query_data'
-        filename = f'hp200_seed{seed}.pkl'
+        filename = f'hp{hp}_seed{seed}.pkl'
         with open(os.path.join(output_dir, filename), 'rb') as f:
             records = pickle.load(f)
 
         print(len(records))  # 15625
-        transform_nb201_to_graph(records, hp='200', seed=seed)
-        datasets = NasBench201Dataset(0, 15355, hp='200', seed=seed)
+        transform_nb201_to_graph(records, hp=hp, seed=seed)
+        datasets = NasBench201Dataset(0, 15355, hp=hp, seed=seed)
         print(datasets)

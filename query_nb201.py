@@ -9,12 +9,16 @@ if __name__ == '__main__':
     output_dir = 'nb201_query_data'
     Path(output_dir).mkdir(exist_ok=True)
 
-    seed_list = [777, 888] # 999
+    hp = '12'  # can be 12 or 200 for cifar-10
+    # is_random For hp=12 seed={111, 777}
+    # is_random For hp=200 seed={777, 888, 999}
+    # seed 999 data is not completed
+    if hp == '12':
+        seed_list = [111, 777]
+    elif hp == '200':
+        seed_list = [777, 888] # 999
+
     for is_random in seed_list:
-        hp = '200' # can be 12 or 200 for cifar-10
-        # is_random For hp=12 seed={111, 777}
-        # is_random For hp=200 seed={777, 888, 999}
-        # seed 999 data is not completed
 
         api = create(None, 'tss', fast_mode=True, verbose=False)
         # Create the API instance for the topology search space in NATS
@@ -37,6 +41,7 @@ if __name__ == '__main__':
         if hp == '12':
             metrics += ['test-accuracy', 'test-loss']
 
+        count = 0
         for idx in range(len(api)):
             print('start model NO. {}'.format(idx))
             record = {metric: [] for metric in metrics}
@@ -47,6 +52,7 @@ if __name__ == '__main__':
             for epoch in range(total_train_epo):
                 try:
                     info = api.get_more_info(idx, 'cifar10-valid', iepoch=epoch, hp=hp, is_random=is_random)
+                    count += 1
                     for metric in metrics:
                         record[metric].append(info[metric])
                 except:
@@ -65,6 +71,7 @@ if __name__ == '__main__':
             now_array = template_array.copy()
             final.append([now_array, arch_list, record])
 
+        print(f'count = {count / total_train_epo}')
         filename = f'hp{hp}_seed{is_random}.pkl'
         with open(os.path.join(output_dir, filename), 'wb') as file:
             pickle.dump(final, file)
