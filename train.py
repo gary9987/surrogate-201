@@ -68,13 +68,26 @@ if __name__ == '__main__':
                 pred_dict[key].append(label[ep: ep + 12])
                 label_dict[key].append(pred[ep: ep + 12])
 
+    kt_list = []
+    final_kt_list = []
+    r2_list = []
+    final_r2_list = []
+
     for key in partition:
         kt, _ = get_avg_kt(pred_dict[key], label_dict[key])
         final_kt, _ = get_final_epoch_kt(pred_dict[key], label_dict[key])
         r2 = get_avg_r2(pred_dict[key], label_dict[key])
         final_r2 = get_final_epoch_r2(pred_dict[key], label_dict[key])
+        kt_list.append(kt)
+        final_kt_list.append(final_kt)
+        r2_list.append(r2)
+        final_r2_list.append(final_r2)
         logging.info(f'{key} avg KT: {kt}')
         logging.info(f'{key} final KT: {final_kt}')
         logging.info(f'{key} avg r2: {r2}')
         logging.info(f'{key} final r2: {final_r2}')
 
+    logging.info(f'Avg of {partition} avg KT: {sum(kt_list)/len(kt_list)}')
+    logging.info(f'Avg of {partition} final KT: {sum(final_kt_list) / len(final_kt_list)}')
+    logging.info(f'Avg of {partition} avg r2: {sum(r2_list) / len(r2_list)}')
+    logging.info(f'Avg of {partition} final r2: {sum(final_r2_list) / len(final_r2_list)}')
