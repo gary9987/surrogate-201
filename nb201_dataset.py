@@ -1,6 +1,7 @@
 import logging
 from pathlib import Path
 
+import spektral.data
 from spektral.data import Dataset, Graph
 import pickle
 import numpy as np
@@ -35,7 +36,25 @@ def train_valid_test_split_dataset(data, ratio=[0.8, 0.1, 0.1], shuffle=False, s
     return ret
 
 
-def transform_nb201_to_graph(records: dict, hp: str, seed: int):
+def convert_matrix_ops_to_graph(matrix, ops):
+    features_dict = {'INPUT': 0, 'none': 1, 'skip_connect': 2, 'nor_conv_1x1': 3, 'nor_conv_3x3': 4,
+                     'avg_pool_3x3': 5, 'OUTPUT': 6}
+
+    num_features = len(features_dict)
+    num_nodes = matrix.shape[0]
+
+    # Node features X
+    x = np.zeros((num_nodes, num_features), dtype=float)  # num_nodes * (features + metadata + num_layer)
+    for i in range(len(ops)):
+        x[i][features_dict[ops[i]]] = 1
+
+    # Adjacency matrix A
+    a = np.array(matrix).astype(float)
+
+    return spektral.data.Graph(x=x, a=a)
+
+
+def transform_nb201_to_graph_new(records: dict, hp: str, seed: int):
     features_dict = {'INPUT': 0, 'none': 1, 'skip_connect': 2, 'nor_conv_1x1': 3, 'nor_conv_3x3': 4,
                      'avg_pool_3x3': 5, 'OUTPUT': 6}
 
@@ -46,7 +65,7 @@ def transform_nb201_to_graph(records: dict, hp: str, seed: int):
     for record, no in zip(records, range(len(records))):
 
         matrix, ops, metrics = np.array(record[0]), record[1], record[2]
-        nodes = matrix.shape[0]
+        num_nodes = matrix.shape[0]
 
         # Labels Y
         y = np.zeros((3, int(hp)))  # (train_accuracy, validation_accuracy, test_accuracy) * epoch(12)
@@ -56,20 +75,13 @@ def transform_nb201_to_graph(records: dict, hp: str, seed: int):
         for i, j in enumerate(metrics_list):
             y[i] = np.array(metrics[j])
 
-        # Node features X
-        x = np.zeros((nodes, num_features), dtype=float)  # nodes * (features + metadata + num_layer)
-        for i in range(len(ops)):
-            x[i][features_dict[ops[i]]] = 1
-
-        # Adjacency matrix A
-        adj_matrix = np.array(matrix).astype(float)
-
+        graph = convert_matrix_ops_to_graph(matrix, ops)
 
         filename = os.path.join(file_path, f'graph_{no}.npz')
-        np.savez(filename, a=adj_matrix, x=x, y=y)
+        np.savez(filename, a=graph.a, x=graph.x, y=y)
         logger.info(f'graph_{no}.npz is saved.')
         print(f'graph_{no}.npz is saved.')
-
+        
 
 class NasBench201Dataset(Dataset):
     def __init__(self, start: int, end: int, hp: str, seed: int, **kwargs):
