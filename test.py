@@ -15,7 +15,9 @@ logging.basicConfig(filename=log_filename, level=logging.INFO, force=True)
 if __name__ == '__main__':
 
     model = keras.models.load_model('model')
-    datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624),
+    hp = '200'
+    # hp=12 end=15624
+    datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, hp=hp, seed=777),
                                               ratio=[0.8, 0.1, 0.1],
                                               shuffle=True,
                                               shuffle_seed=0)

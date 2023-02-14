@@ -54,18 +54,13 @@ def convert_matrix_ops_to_graph(matrix, ops):
     return spektral.data.Graph(x=x, a=a)
 
 
-def transform_nb201_to_graph_new(records: dict, hp: str, seed: int):
-    features_dict = {'INPUT': 0, 'none': 1, 'skip_connect': 2, 'nor_conv_1x1': 3, 'nor_conv_3x3': 4,
-                     'avg_pool_3x3': 5, 'OUTPUT': 6}
-
-    num_features = len(features_dict)
+def transform_nb201_to_graph(records: dict, hp: str, seed: int):
     file_path = f'NasBench201Dataset_hp{hp}_seed{seed}'
     Path(file_path).mkdir(exist_ok=True)
 
     for record, no in zip(records, range(len(records))):
 
         matrix, ops, metrics = np.array(record[0]), record[1], record[2]
-        num_nodes = matrix.shape[0]
 
         # Labels Y
         y = np.zeros((3, int(hp)))  # (train_accuracy, validation_accuracy, test_accuracy) * epoch(12)
