@@ -63,7 +63,14 @@ def transform_nb201_to_graph(records: dict, hp: str, seed: int):
         matrix, ops, metrics = np.array(record[0]), record[1], record[2]
 
         # Labels Y
-        y = np.zeros((3, int(hp)))  # (train_accuracy, validation_accuracy, test_accuracy) * epoch(12)
+        if hp == '12':
+            num_metrics = 3
+        elif hp == '200':
+            num_metrics = 2
+        else:
+            raise NotImplementedError('hp')
+
+        y = np.zeros((num_metrics, int(hp)))  # (train_accuracy, validation_accuracy, test_accuracy) * epoch(12)
         metrics_list = ['train-accuracy', 'valid-accuracy']
         if hp == '12':
             metrics_list.append('test-accuracy')
@@ -116,7 +123,7 @@ class NasBench201Dataset(Dataset):
 
 
 if __name__ == '__main__':
-    hp = '12' # hp = 12 or 200
+    hp = '200' # hp = 12 or 200
 
     if hp == '12':
         seed_list = [111, 777]
@@ -131,5 +138,5 @@ if __name__ == '__main__':
 
         print(len(records))  # 15625
         transform_nb201_to_graph(records, hp=hp, seed=seed)
-        datasets = NasBench201Dataset(0, 15355, hp=hp, seed=seed)
+        datasets = NasBench201Dataset(0, 15624, hp=hp, seed=seed)
         print(datasets)

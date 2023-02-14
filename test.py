@@ -5,19 +5,24 @@ import logging
 from nb201_dataset import NasBench201Dataset, train_valid_test_split_dataset
 from spektral.data import BatchLoader
 from metrics import get_avg_kt, get_avg_r2, get_final_epoch_kt, get_final_epoch_r2
-
+import sys
 log_filename = 'test.log'
 if os.path.exists(log_filename):
     os.remove(log_filename)
 
 logging.basicConfig(filename=log_filename, level=logging.INFO, force=True)
+handler = logging.StreamHandler(sys.stdout)
+handler.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+logging.getLogger().addHandler(handler)
 
 if __name__ == '__main__':
 
     model = keras.models.load_model('model')
-    hp = '200'
+    hp = 200
     # hp=12 end=15624
-    datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, hp=hp, seed=777),
+    datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, hp=str(hp), seed=777),
                                               ratio=[0.8, 0.1, 0.1],
                                               shuffle=True,
                                               shuffle_seed=0)
@@ -45,10 +50,10 @@ if __name__ == '__main__':
         preds = model.predict(data[0])
         for label, pred in zip(data[1], preds):
 
-            for key, ep in zip(partition, range(0, 35, 12)):
+            for key, ep in zip(partition, range(0, hp*3-1, hp)):
                 #logging.info(f'\n{i[ep: ep+12]}\n{j[ep: ep+12]}')
-                pred_dict[key].append(label[ep: ep + 12])
-                label_dict[key].append(pred[ep: ep+12])
+                pred_dict[key].append(pred[ep: ep+hp])
+                label_dict[key].append(label[ep: ep+hp])
 
     for key in partition:
         kt, _ = get_avg_kt(pred_dict[key], label_dict[key])

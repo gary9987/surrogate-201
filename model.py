@@ -13,7 +13,12 @@ class Graph_Model(Model):
         self.bn = tensorflow.keras.layers.BatchNormalization()
         self.pool = GlobalMaxPool()
         self.dropout = tensorflow.keras.layers.Dropout(dropout)
-        self.dense = Dense(3 * epochs)  # (train_acc, valid_acc, test_acc) * 12 epochs
+        if epochs == 12:
+            self.dense = Dense(3 * epochs)  # (train_acc, valid_acc, test_acc) * 12 epochs
+        elif epochs == 200:
+            self.dense = Dense(2 * epochs)  # (train_acc, valid_acc) * 200 epochs
+        else:
+            raise NotImplementedError('epochs')
 
     def call(self, inputs):
         out = self.graph_conv(inputs)
