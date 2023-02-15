@@ -55,7 +55,10 @@ if __name__ == '__main__':
 
     test_loader = BatchLoader(datasets['test'], batch_size=batch_size, shuffle=False, epochs=1)
 
-    partition = ['train', 'valid', 'test']
+    partition = ['train', 'valid']
+    if label_epochs == 12:
+        partition.append('test')
+
     pred_dict = {i: [] for i in partition}
     label_dict = {i: [] for i in partition}
 
@@ -63,10 +66,10 @@ if __name__ == '__main__':
         preds = model.predict(data[0])
         for label, pred in zip(data[1], preds):
 
-            for key, ep in zip(partition, range(0, 35, 12)):
+            for key, ep in zip(partition, range(0, label_epochs * 3 - 1, label_epochs)):
                 # logging.info(f'\n{i[ep: ep+12]}\n{j[ep: ep+12]}')
-                pred_dict[key].append(label[ep: ep + 12])
-                label_dict[key].append(pred[ep: ep + 12])
+                pred_dict[key].append(pred[ep: ep + label_epochs])
+                label_dict[key].append(label[ep: ep + label_epochs])
 
     kt_list = []
     final_kt_list = []
@@ -82,12 +85,12 @@ if __name__ == '__main__':
         final_kt_list.append(final_kt)
         r2_list.append(r2)
         final_r2_list.append(final_r2)
-        logging.info(f'{key} avg KT: {kt}')
-        logging.info(f'{key} final KT: {final_kt}')
-        logging.info(f'{key} avg r2: {r2}')
-        logging.info(f'{key} final r2: {final_r2}')
+        logger.info(f'{key} avg KT: {kt}')
+        logger.info(f'{key} final KT: {final_kt}')
+        logger.info(f'{key} avg r2: {r2}')
+        logger.info(f'{key} final r2: {final_r2}')
 
-    logging.info(f'Avg of {partition} avg KT: {sum(kt_list)/len(kt_list)}')
-    logging.info(f'Avg of {partition} final KT: {sum(final_kt_list) / len(final_kt_list)}')
-    logging.info(f'Avg of {partition} avg r2: {sum(r2_list) / len(r2_list)}')
-    logging.info(f'Avg of {partition} final r2: {sum(final_r2_list) / len(final_r2_list)}')
+    logger.info(f'Avg of {partition} avg KT: {sum(kt_list)/len(kt_list)}')
+    logger.info(f'Avg of {partition} final KT: {sum(final_kt_list) / len(final_kt_list)}')
+    logger.info(f'Avg of {partition} avg r2: {sum(r2_list) / len(r2_list)}')
+    logger.info(f'Avg of {partition} final r2: {sum(final_r2_list) / len(final_r2_list)}')
