@@ -1,36 +1,58 @@
 import os.path
 import pickle
-from typing import List
+from typing import List, Tuple
 
 from nats_bench import create
 import numpy as np
 from pathlib import Path
 
+# Useful constants
+OP_PRIMITIVES_201 = [
+    'output',
+    'input',
+    'nor_conv_1x1',
+    'nor_conv_3x3',
+    'avg_pool_3x3',
+    'skip_connect',
+    'none',
+]
 
-def convert_arch_str_to_martrix_ops(arch_list: List):
-    template_array = np.zeros((8, 8), dtype=int)
-    template_array[0][1] = template_array[0][2] = template_array[0][3] = 1
-    template_array[1][4] = template_array[1][6] = 1
-    template_array[2][5] = 1
-    template_array[3][7] = 1
-    template_array[4][6] = 1
-    template_array[5][7] = template_array[6][7] = 1
+OPS_by_IDX_201 = {OP_PRIMITIVES_201.index(i):i for i in OP_PRIMITIVES_201}
+OPS_201 = {i:OP_PRIMITIVES_201.index(i) for i in OP_PRIMITIVES_201}
 
-    ops_list = ['INPUT']
-    for j in range(3):
-        for k in range(3):
-            if j < len(arch_list[k]):
-                ops_list.append(arch_list[k][j][0])
-    ops_list.append('OUTPUT')
+ADJACENCY = np.array([[0, 1, 1, 0, 1, 0, 0, 0],
+                    [0, 0, 0, 1, 0, 1 ,0 ,0],
+                    [0, 0, 0, 0, 0, 0, 1, 0],
+                    [0, 0, 0, 0, 0, 0, 1, 0],
+                    [0, 0, 0, 0, 0, 0, 0, 1],
+                    [0, 0, 0, 0, 0, 0, 0, 1],
+                    [0, 0, 0, 0, 0, 0, 0, 1],
+                    [0, 0, 0, 0, 0, 0, 0, 0]])
 
-    return template_array, ops_list
+# Partial reference from https://github.com/automl/SVGe/blob/main/datasets/NASBench201.py
+def convert_arch_str_to_martrix_ops(arch_str: str) -> Tuple[np.ndarray, List[str]]:
+
+    nodes = ['input']
+    steps = arch_str.split('+')
+    steps_coding = ['0', '0', '1', '0', '1', '2']
+    cont = 0
+    for step in steps:
+        step = step.strip('|').split('|')
+        for node in step:
+            n, idx = node.split('~')
+            assert idx == steps_coding[cont]
+            cont += 1
+            nodes.append(n)
+    nodes.append('output')
+
+    return ADJACENCY, nodes
 
 
 if __name__ == '__main__':
     output_dir = 'nb201_query_data'
     Path(output_dir).mkdir(exist_ok=True)
 
-    hp = '12'  # can be 12 or 200 for cifar-10
+    hp = '200'  # can be 12 or 200 for cifar-10
     # is_random For hp=12 seed={111, 777}
     # is_random For hp=200 seed={777, 888, 999}
     # seed 999 data is not completed
@@ -70,11 +92,10 @@ if __name__ == '__main__':
                     print(f'no data for idx {idx}')
                     break
 
-            arch_str = api.query_info_str_by_arch(idx).split('\n')[0]
-            tmp_list = api.str2lists(arch_str)
-
-            matrix, ops_list = convert_arch_str_to_martrix_ops(tmp_list)
-            final.append([matrix, ops_list, record])
+            #arch_str = api.query_info_str_by_arch(idx)
+            arch_str = api.query_meta_info_by_index(idx).arch_str
+            adj_matrix, ops_list = convert_arch_str_to_martrix_ops(arch_str)
+            final.append([adj_matrix, ops_list, record])
 
         print(f'count = {count / total_train_epo}')
         filename = f'hp{hp}_seed{is_random}.pkl'

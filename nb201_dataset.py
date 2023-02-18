@@ -37,8 +37,8 @@ def train_valid_test_split_dataset(data, ratio=[0.8, 0.1, 0.1], shuffle=False, s
 
 
 def convert_matrix_ops_to_graph(matrix, ops):
-    features_dict = {'INPUT': 0, 'none': 1, 'skip_connect': 2, 'nor_conv_1x1': 3, 'nor_conv_3x3': 4,
-                     'avg_pool_3x3': 5, 'OUTPUT': 6}
+    features_dict = {'output': 0, 'input': 1, 'nor_conv_1x1': 2, 'nor_conv_3x3': 3, 'avg_pool_3x3': 4,
+                     'skip_connect': 5, 'none': 6}
 
     num_features = len(features_dict)
     num_nodes = matrix.shape[0]
