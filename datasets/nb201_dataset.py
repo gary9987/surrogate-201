@@ -55,7 +55,7 @@ def convert_matrix_ops_to_graph(matrix, ops):
 
 
 def transform_nb201_to_graph(records: dict, hp: str, seed: int):
-    file_path = f'NasBench201Dataset_hp{hp}_seed{seed}'
+    file_path = f'../NasBench201Dataset_hp{hp}_seed{seed}'
     Path(file_path).mkdir(exist_ok=True)
 
     for record, no in zip(records, range(len(records))):
