@@ -11,6 +11,12 @@ class ReshapeYTransform:
 
         return graph
 
+class OnlyValidAccTransform:
+    def __call__(self, graph):
+        if graph.y is not None:
+            graph.y = graph.y[1, :]
+
+        return graph
 
 class RemoveParAndFlopTransform:
     def __call__(self, graph):
