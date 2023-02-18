@@ -131,7 +131,7 @@ if __name__ == '__main__':
         seed_list = [777, 888] # 999
 
     for seed in seed_list:
-        output_dir = 'nb201_query_data'
+        output_dir = '../nb201_query_data'
         filename = f'hp{hp}_seed{seed}.pkl'
         with open(os.path.join(output_dir, filename), 'rb') as f:
             records = pickle.load(f)
