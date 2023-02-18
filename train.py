@@ -4,7 +4,8 @@ from model import Graph_Model
 import tensorflow as tf
 import logging
 import sys
-from datasets.nb201_dataset import NasBench201Dataset, train_valid_test_split_dataset
+from datasets.nb201_dataset import NasBench201Dataset
+from datasets.utils_data import train_valid_test_split_dataset
 from spektral.data import BatchLoader
 from metrics import get_avg_kt, get_avg_r2, get_final_epoch_kt, get_final_epoch_r2
 
@@ -19,41 +20,44 @@ logger.addHandler(handler)
 
 
 '''
-mae
-n_hidden = 256 * 64
-2023-02-17 02:47:14,167 - __main__ - INFO - Test loss: 3.1751654148101807
-2023-02-17 02:47:15,362 - __main__ - INFO - valid avg KT: 0.720009150446175
-2023-02-17 02:47:15,362 - __main__ - INFO - valid final KT: 0.818033679082239
-2023-02-17 02:47:15,362 - __main__ - INFO - valid avg r2: 0.8894060437871442
-2023-02-17 02:47:15,362 - __main__ - INFO - valid final r2: 0.8888513897650342
-
-mae
-n_hidden = 256 * 128
-2023-02-17 12:13:43,230 - __main__ - INFO - Test loss: 3.0976991653442383
-2023-02-17 12:13:44,430 - __main__ - INFO - valid avg KT: 0.7270281661162866
-2023-02-17 12:13:44,430 - __main__ - INFO - valid final KT: 0.834623220828212
-2023-02-17 12:13:44,430 - __main__ - INFO - valid avg r2: 0.8981137365661757
-2023-02-17 12:13:44,430 - __main__ - INFO - valid final r2: 0.9273346105833765
-
-n_hidden = 256 * 96
-98/98 [==============================] - 0s 2ms/step - loss: 18.6336
-2023-02-16 14:25:58,505 - __main__ - INFO - Test loss: 18.633615493774414
-2023-02-16 14:26:01,556 - __main__ - INFO - valid avg KT: 0.7117642347113109
-2023-02-16 14:26:01,556 - __main__ - INFO - valid final KT: 0.7964802185411368
-2023-02-16 14:26:01,556 - __main__ - INFO - valid avg r2: 0.9240731107323961
-2023-02-16 14:26:01,556 - __main__ - INFO - valid final r2: 0.9873605223246051
-
 n_hidden = 256 * 32
-98/98 [==============================] - 0s 2ms/step - loss: 19.0196
-2023-02-16 02:18:34,430 - __main__ - INFO - Test loss: 19.01958656311035
-2023-02-16 02:18:37,522 - __main__ - INFO - valid avg KT: 0.706678500194417
-2023-02-16 02:18:37,523 - __main__ - INFO - valid final KT: 0.7763533566947862
-2023-02-16 02:18:37,523 - __main__ - INFO - valid avg r2: 0.9223269308711685
-2023-02-16 02:18:37,523 - __main__ - INFO - valid final r2: 0.9821228606288467
-2023-02-16 02:18:37,523 - __main__ - INFO - Avg of ['valid'] avg KT: 0.706678500194417
-2023-02-16 02:18:37,523 - __main__ - INFO - Avg of ['valid'] final KT: 0.7763533566947862
-2023-02-16 02:18:37,523 - __main__ - INFO - Avg of ['valid'] avg r2: 0.9223269308711685
-2023-02-16 02:18:37,523 - __main__ - INFO - Avg of ['valid'] final r2: 0.9821228606288467
+mae
+2023-02-18 15:37:28,767 - __main__ - INFO - valid avg KT: 0.7374774040702665
+2023-02-18 15:37:28,767 - __main__ - INFO - valid final KT: 0.8485214035621704
+2023-02-18 15:37:28,767 - __main__ - INFO - valid avg r2: 0.9082094481908604
+2023-02-18 15:37:28,767 - __main__ - INFO - valid final r2: 0.9412924297748704
+mse
+023-02-18 16:01:45,576 - __main__ - INFO - Test loss: 20.011558532714844
+2023-02-18 16:01:46,632 - __main__ - INFO - valid avg KT: 0.7281491125656102
+2023-02-18 16:01:46,632 - __main__ - INFO - valid final KT: 0.8070790871274783
+2023-02-18 16:01:46,632 - __main__ - INFO - valid avg r2: 0.9175857863487716
+2023-02-18 16:01:46,632 - __main__ - INFO - valid final r2: 0.9655637727304788
+
+n_hidden = 256 * 64
+mae
+2023-02-18 15:09:46,856 - __main__ - INFO - valid avg KT: 0.7404437502248676
+2023-02-18 15:09:46,856 - __main__ - INFO - valid final KT: 0.8501183796364733
+2023-02-18 15:09:46,856 - __main__ - INFO - valid avg r2: 0.9091128082621964
+2023-02-18 15:09:46,856 - __main__ - INFO - valid final r2: 0.9365387193297008
+mse
+2023-02-18 16:16:00,580 - __main__ - INFO - valid avg KT: 0.7195785664790253
+2023-02-18 16:16:00,580 - __main__ - INFO - valid final KT: 0.7901186903768046
+2023-02-18 16:16:00,580 - __main__ - INFO - valid avg r2: 0.9171485771807407
+2023-02-18 16:16:00,581 - __main__ - INFO - valid final r2: 0.9669182222014336
+
+n_hidden = 256 * 128
+mae
+2023-02-18 15:02:27,791 - __main__ - INFO - Test loss: 2.8402063846588135
+2023-02-18 15:02:28,874 - __main__ - INFO - valid avg KT: 0.728318550718445
+2023-02-18 15:02:28,874 - __main__ - INFO - valid final KT: 0.8319821470949826
+2023-02-18 15:02:28,874 - __main__ - INFO - valid avg r2: 0.9072266789625367
+2023-02-18 15:02:28,874 - __main__ - INFO - valid final r2: 0.9308830909549481
+mse
+2023-02-18 16:28:51,590 - __main__ - INFO - valid avg KT: 0.7181505848911058
+2023-02-18 16:28:51,590 - __main__ - INFO - valid final KT: 0.792515369205859
+2023-02-18 16:28:51,590 - __main__ - INFO - valid avg r2: 0.9177202080362106
+2023-02-18 16:28:51,590 - __main__ - INFO - valid final r2: 0.9707941779490004
+
 '''
 
 tf.random.set_seed(777)
@@ -65,7 +69,7 @@ if __name__ == '__main__':
     model_dropout = 0.1
     label_epochs = 200
     #n_hidden = 256 * 12
-    n_hidden = 256 * 128
+    n_hidden = 256 * 64
     batch_size = 64
     train_epochs = 150
     patience = 20
