@@ -1,6 +1,7 @@
 import logging
 from pathlib import Path
 import spektral.data
+import wget
 from spektral.data import Dataset, Graph
 import pickle
 import numpy as np
@@ -60,21 +61,20 @@ def transform_nb201_to_graph(records: dict, hp: str, seed: int):
 
 class NasBench201Dataset(Dataset):
     def __init__(self, start: int, end: int, hp: str, seed: int, **kwargs):
-        self.file_path = f'NasBench201Dataset_hp{hp}_seed{seed}'
+        self.file_path = os.path.join('NasBench201Dataset', f'NasBench201Dataset_hp{hp}_seed{seed}')
         self.start = start
         self.end = end
         super().__init__(**kwargs)
 
     def download(self):
-        '''
+
         if not os.path.exists(self.file_path):
             print('Downloading...')
-            file_name = wget.download('https://www.dropbox.com/s/40lrvb3lcgij5c8/NasBench101Dataset.zip?dl=1')
+            file_name = wget.download('https://www.dropbox.com/s/925d04q9ko9wcgz/NasBench201Dataset.zip?dl=1')
             print('Save dataset to {}'.format(file_name))
             os.system('unzip {}'.format(file_name))
             print(f'Unzip dataset finish.')
-        '''
-        pass
+
 
     def read(self):
         output = []
