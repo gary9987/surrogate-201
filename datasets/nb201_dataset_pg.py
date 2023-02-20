@@ -23,6 +23,8 @@ class Dataset:
         else:
             path = os.path.join(".", "datasets", "nasbench201")  # for debugging
 
+        pathlib.Path(path).mkdir(exist_ok=True)
+
         file_cache_train = os.path.join(path, "cache_train")
         file_cache_test = os.path.join(path, "cache_test")
         file_cache = os.path.join(path, "cache")
@@ -33,9 +35,10 @@ class Dataset:
             self.data = []
             for graph in tqdm.tqdm(nasbench):
                 self.data.append(self.map_item(graph))
-                self.data[-1].edge_index = Dataset.map_network(graph)[0]
-                self.data[-1].node_atts = Dataset.map_network(graph)[1]
-                self.data[-1].num_nodes = graph.x.sahpe[0]
+                map_network = Dataset.map_network(graph)
+                self.data[-1].edge_index = map_network[0]
+                self.data[-1].node_atts = map_network[1]
+                self.data[-1].num_nodes = graph.x.shape[0]
 
             print(f"Saving data to cache: {file_cache}")
             torch.save(self.data, file_cache)
@@ -95,8 +98,8 @@ class Dataset:
         train_acc = graph.y[0, :]
         valid_acc = graph.y[1, :]
 
-        train_acc = torch.FloatTensor([train_acc / 100.0])
-        valid_acc = torch.FloatTensor([valid_acc / 100.0])
+        train_acc = torch.FloatTensor(train_acc / 100.0)
+        valid_acc = torch.FloatTensor(valid_acc / 100.0)
 
         if self.hp == '12':
             test_acc = graph.y[2, :]
@@ -111,7 +114,7 @@ class Dataset:
 
         ops = np.argmax(graph.x, axis=1)
         node_attr = torch.LongTensor(ops)
-        edge_index = torch.tensor(graph.a)
+        edge_index = torch.tensor(np.nonzero(graph.a))
 
         return edge_index.long(), node_attr
 
@@ -174,6 +177,6 @@ if __name__ == "__main__":
 
 
     ds = Dataset(10, '200', 777)
-    for batch in ds.dataloader:
+    for batch in ds.train_dataloader:
         print(batch)
         break

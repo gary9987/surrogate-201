@@ -54,20 +54,14 @@ def prep_data(data, max_num_nodes, aggr='sum', device='cpu', NB201=False, NB101=
         edge_list_reverse = sort_edge_index(edge_list_reverse, num_nodes)
         nodes = np.zeros(max_num_nodes - 1, dtype=int)
         nodes[:num_nodes - 1] = 1
-        acc = graph.acc.numpy().item()
+        train_acc = graph.train_acc.numpy()
         if NB201:
-            test_acc = graph.test_acc.numpy().item()
-            acc_avg = graph.acc_avg.numpy().item()
-            test_acc_avg = graph.test_acc_avg.numpy().item()
-            training_time = graph.training_time.numpy().item()
+            valid_acc = graph.valid_acc.numpy()
             data = Data(edge_index=edge_list.to(device),
                         num_nodes=num_nodes,
                         node_atts=torch.LongTensor(node_atts).to(device),
-                        acc=torch.tensor([acc]).to(device),
-                        test_acc=torch.tensor([test_acc]).to(device),
-                        acc_avg=torch.tensor([acc_avg]).to(device),
-                        test_acc_avg=torch.tensor([test_acc_avg]).to(device),
-                        training_time=torch.tensor([training_time]).to(device),
+                        train_acc=torch.tensor(train_acc).to(device),
+                        valid_acc=torch.tensor(valid_acc).to(device),
                         nodes=torch.tensor(nodes).unsqueeze(0).to(device)
                         )
         elif NB101:
