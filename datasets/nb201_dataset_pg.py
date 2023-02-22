@@ -9,8 +9,8 @@ from torch_geometric.data import DataLoader
 from torch_geometric.utils import to_dense_adj
 import torch.nn.functional as F
 from collections import OrderedDict
-from nb201_dataset import NasBench201Dataset
-from utils_data import prep_data
+from datasets.nb201_dataset import NasBench201Dataset
+from datasets.utils_data import prep_data
 
 class Dataset:
 
