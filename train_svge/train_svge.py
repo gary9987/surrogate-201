@@ -105,9 +105,9 @@ def main(args, log_dir):
     ##############################################################################
     print("Creating Dataset.")
     if args.data_search_space == 'NB201':
-        from datasets.nb201_dataset_ori import Dataset as Dataset201
-        #dataset = Dataset201(batch_size=data_config['batch_size'], hp=data_config['hp'], nb201_seed=data_config['nb201_seed'])
-        dataset = Dataset201(batch_size=data_config['batch_size'])
+        from datasets.nb201_dataset_pg import Dataset as Dataset201
+        dataset = Dataset201(batch_size=data_config['batch_size'], hp=data_config['hp'], nb201_seed=data_config['nb201_seed'])
+        #dataset = Dataset201(batch_size=data_config['batch_size'])
     else:
         raise TypeError("Unknow Dataset: {:}".format(args.data_search_space))
 
@@ -122,7 +122,8 @@ def main(args, log_dir):
     optimizer = torch.optim.Adam(model.parameters(), lr=model_config['learning_rate'])
     scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.1, patience=10, verbose=True)
 
-    logging.info("param size = %fMB", util.count_parameters_in_MB(model))
+    # It takes long time to count.
+    #logging.info("param size = %fMB", util.count_parameters_in_MB(model))
 
     if not args.only_test_mode:
 
