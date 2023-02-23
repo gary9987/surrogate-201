@@ -45,7 +45,7 @@ random.seed(args.seed)
 #                              Runfolder
 #
 ##############################################################################
-os.chdir('../')
+
 
 if not args.only_test_mode:
     now = datetime.now()
