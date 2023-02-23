@@ -16,6 +16,35 @@ from torch_geometric.data import Data
 from torch_geometric.nn import MessagePassing
 from torch_geometric.nn.inits import glorot, zeros
 from torch_geometric.utils import softmax, subgraph
+import torch_scatter
+
+
+def scatter(name, src, index, dim_size=None):
+    r"""Aggregates all values from the :attr:`src` tensor at the indices
+    specified in the :attr:`index` tensor along the first dimension.
+    If multiple indices reference the same location, their contributions
+    are aggregated according to :attr:`name` (either :obj:`"add"`,
+    :obj:`"mean"` or :obj:`"max"`).
+
+    Args:
+        name (string): The aggregation to use (:obj:`"add"`, :obj:`"mean"`,
+            :obj:`"max"`).
+        src (Tensor): The source tensor.
+        index (LongTensor): The indices of elements to scatter.
+        dim_size (int, optional): Automatically create output tensor with size
+            :attr:`dim_size` in the first dimension. If set to :attr:`None`, a
+            minimal sized output tensor is returned. (default: :obj:`None`)
+
+    :rtype: :class:`Tensor`
+    """
+
+    assert name in ['add', 'mean']
+    op = getattr(torch_scatter, 'scatter_{}'.format(name))
+    out = op(src, index, 0, None, dim_size)
+    if isinstance(out, tuple):
+        out = out[0]
+
+    return out
 
 
 def edges2index(edges, finish=False):
@@ -156,12 +185,12 @@ class GraphEmb(nn.Module):
     def forward(self, h, batch):
         if self.aggr == 'mean':
             h = self.f_m(h)
-            return torch.scatter('mean', h, batch)
+            return scatter('mean', h, batch)
         elif self.aggr == 'gsum':
             h_vG = self.f_m(h)
             g_vG = self.sigm(self.g_m(h))
             h_G = torch.mul(h_vG, g_vG)
-            return torch.scatter('add', h_G, batch)
+            return scatter('add', h, batch)
 
 
 class GNNEncoder(nn.Module):
