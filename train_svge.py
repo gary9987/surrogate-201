@@ -121,6 +121,7 @@ def main(args, log_dir):
     model = eval(args.model)(model_config=model_config, data_config=data_config).to(args.device)
     optimizer = torch.optim.Adam(model.parameters(), lr=model_config['learning_rate'])
     scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.1, patience=10, verbose=True)
+    print('model initialed')
 
     # It takes long time to count.
     #logging.info("param size = %fMB", util.count_parameters_in_MB(model))
@@ -251,14 +252,14 @@ def evaluate(data, model, epoch, device, log_dir, data_config, Dataset, ENAS=Fal
 
         logger.info('Extract mean and std of latent space ')
         if not pretrained:
-            util.save_latent_representations(Dataset, model, device, epoch, log_dir, data_name=data_config['data_name'],
+            util.save_latent_representations(Dataset, data_config, model, device, epoch, log_dir, data_name=data_config['data_name'],
                                              ENAS=ENAS, NB101=NB101, NB201=NB201)
 
         data = loadmat(os.path.join(log_dir, data_config['data_name'] + '_latent_epoch{}.mat'.format(epoch)))
         Z_train = data['Z_train']
 
         n_latent_points = 1000
-        valid, unique, novel = util.prior_validity(Dataset, model, Z_train, n_latent_points,
+        valid, unique, novel = util.prior_validity(Dataset, data_config, model, Z_train, n_latent_points,
                                                    device, scale_to_train_range=True, ENAS=ENAS, NB101=NB101,
                                                    NB201=NB201)
 

@@ -307,23 +307,18 @@ def extract_latent(data_loader, model, device, ENAS=False, NB101=False, NB201=Fa
             Y_test.append(graph.test_acc.cpu())
             Y_time.append(graph.training_time.cpu())
         elif NB201 == True:
-            Y.append(graph.acc.cpu())
-            Y_test.append(graph.test_acc.cpu())
-            Y_time.append(graph.training_time.cpu())
-            Y_avg.append(graph.acc_avg.cpu())
-            Y_test_avg.append(graph.test_acc_avg.cpu())
+            Y.append(graph.train_acc.cpu())
+            Y_test.append(graph.valid_acc.cpu())
     if ENAS == True:
         return np.concatenate(Z, 0), torch.cat(Y, 0).numpy()
     elif NB101 == True:
         return np.concatenate(Z, 0), torch.cat(Y, 0).numpy(), torch.cat(Y_test, 0).numpy(), torch.cat(Y_time, 0).numpy()
     elif NB201 == True:
-        return np.concatenate(Z, 0), torch.cat(Y, 0).numpy(), torch.cat(Y_test, 0).numpy(), torch.cat(Y_time,
-                                                                                                      0).numpy(), torch.cat(
-            Y_avg, 0).numpy(), torch.cat(Y_test_avg, 0).numpy()
+        return np.concatenate(Z, 0), torch.cat(Y, 0).numpy(), torch.cat(Y_test, 0).numpy()
 
 
-def save_latent_representations(Dataset, model, device, epoch, path, data_name, ENAS=False, NB101=False, NB201=False):
-    data = Dataset(batch_size=1024)
+def save_latent_representations(Dataset, config, model, device, epoch, path, data_name, ENAS=False, NB101=False, NB201=False):
+    data = Dataset(batch_size=1024, hp=config['hp'], nb201_seed=config['nb201_seed'])
     if ENAS == True:
         Z_train, Y_train = extract_latent(data.train_dataloader, model, device, ENAS=ENAS)
         Z_test, Y_test = extract_latent(data.test_dataloader, model, device, ENAS=ENAS)
@@ -332,9 +327,9 @@ def save_latent_representations(Dataset, model, device, epoch, path, data_name, 
                                                                           NB101=NB101)
         Z_test, Y_val_test, Y_test_test, Y_time_test = extract_latent(data.test_dataloader, model, device, NB101=NB101)
     else:
-        Z_train, Y_val_train, Y_test_train, Y_time_train, Y_val_train_avg, Y_test_train_avg = extract_latent(
+        Z_train, Y_val_train, Y_test_train = extract_latent(
             data.train_dataloader, model, device, NB201=NB201)
-        Z_test, Y_val_test, Y_test_test, Y_time_test, Y_val_test_avg, Y_test_test_avg = extract_latent(
+        Z_test, Y_val_test, Y_test_test = extract_latent(
             data.test_dataloader, model, device, NB201=NB201)
 
     latent_pkl_name = os.path.join(path, data_name +
@@ -372,8 +367,7 @@ def save_latent_representations(Dataset, model, device, epoch, path, data_name, 
                          )
     else:
         with open(latent_pkl_name, 'wb') as f:
-            pickle.dump((Z_train, Y_val_train, Y_test_train, Y_time_train, Y_val_train_avg, Y_test_train_avg, Z_test,
-                         Y_val_test, Y_test_test, Y_time_test, Y_val_test_avg, Y_test_test_avg), f)
+            pickle.dump((Z_train, Y_val_train, Y_test_train, Z_test, Y_val_test, Y_test_test), f)
         print('Saved latent representations to ' + latent_pkl_name)
         scipy.io.savemat(latent_mat_name,
                          mdict={
@@ -381,21 +375,15 @@ def save_latent_representations(Dataset, model, device, epoch, path, data_name, 
                              'Z_test': Z_test,
                              'Y_val_train': Y_val_train,
                              'Y_val_test': Y_val_test,
-                             'Y_val_train_avg': Y_val_train_avg,
-                             'Y_val_test_avg': Y_val_test_avg,
                              'Y_test_train': Y_test_train,
-                             'Y_test_test': Y_test_test,
-                             'Y_test_train_avg': Y_test_train_avg,
-                             'Y_test_test_avg': Y_test_test_avg,
-                             'Y_time_train': Y_time_train,
-                             'Y_time_test': Y_time_test
+                             'Y_test_test': Y_test_test
                          }
                          )
 
 
-def prior_validity(Dataset, model, Z_train, n_latent_points, device, scale_to_train_range=False, ENAS=False,
+def prior_validity(Dataset, config, model, Z_train, n_latent_points, device, scale_to_train_range=False, ENAS=False,
                    NB101=False, NB201=False):
-    dataset = Dataset(batch_size=1)
+    dataset = Dataset(batch_size=1024, hp=config['hp'], nb201_seed=config['nb201_seed'])
     if NB101 == True:
         from datasets.NASBench101 import nasbench
     if scale_to_train_range:
