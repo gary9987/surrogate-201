@@ -34,13 +34,13 @@ parser.add_argument('--model', type=str, default='SVGE_acc')
 parser.add_argument('--name', type=str, default='Train_PP')
 parser.add_argument('--data_search_space', choices=['NB101', 'NB201'],
                     help='which search space for learning autoencoder', default='NB201')
-parser.add_argument("--device", type=str, default="cuda:0")
+parser.add_argument("--device", type=str, default="cuda")
 parser.add_argument('--path_state_dict', type=str, help='directory to saved model', default='state_dicts/SVGE_NB201/')
 parser.add_argument('--save_interval', type=int, default=50, help='how many epochs to wait to save model')
 parser.add_argument('--seed', type=int, default=1, help='random seed (default: 1)')
 parser.add_argument('--checkpoint', type=int, default=300, help='Which checkpoint of trained model to load')
 parser.add_argument('--on_valid', type=int, default=1, help='if predict on valid acc')
-parser.add_argument('--sample_amount', type=int, default=1000,
+parser.add_argument('--sample_amount', type=int, default=14061,
                     help='fine tuning VAE and surrogate on 1000 training data')
 
 args = parser.parse_args()
@@ -193,8 +193,10 @@ def main(args):
                 'epochs': epoch,
                 'loss': train_results["rmse"],
                 'val_rmse': valid_results['rmse'],
-                'kendall_tau': valid_results['kendall_tau'],
-                "spearmanr": valid_results['spearmanr'],
+                'avg KT': valid_results['avg KT'],
+                'final KT': valid_results['final KT'],
+                'avg r2': valid_results['avg r2'],
+                'final r2': valid_results['final r2']
             }
             with open(os.path.join(log_dir, 'results.txt'), 'a') as file:
                 json.dump(str(config_dict), file)
@@ -216,19 +218,22 @@ def train(train_data, model, criterion, optimizer, epoch, device, alpha, data_co
     for step, graph_batch in enumerate(data_loader):
         for i in range(len(graph_batch)):
             graph_batch[i].to(device)
-        vae_loss, recon_loss, kl_loss, pred = model(graph_batch)
-        pred = pred.view(-1)
+        vae_loss, recon_loss, kl_loss, pred, _ = model(graph_batch)
+        # pred = pred.view(-1)
+        # pred.shape = (batch_size, 200)
         if args.on_valid:
             acc_loss = criterion(pred.view(-1), graph_batch[0].valid_acc)
         else:
             acc_loss = criterion(pred.view(-1), graph_batch[0].train_acc)
         loss = alpha * vae_loss + (1 - alpha) * acc_loss
 
-        preds.extend((pred.detach().cpu().numpy()))
+        pred_np = pred.detach().cpu().numpy()
+        preds.extend(pred_np)
+
         if args.on_valid:
-            targets.extend(graph_batch[0].valid_acc.detach().cpu().numpy())
+            targets.extend(graph_batch[0].valid_acc.detach().cpu().numpy().reshape(pred_np.shape[0], data_config['hp']))
         else:
-            targets.extend(graph_batch[0].train_acc.detach().cpu().numpy())
+            targets.extend(graph_batch[0].train_acc.detach().cpu().numpy().reshape(pred_np.shape[0], data_config['hp']))
 
         optimizer.zero_grad()
         loss.backward()
@@ -271,8 +276,7 @@ def infer(val_data, model, criterion, optimizer, epoch, device, alpha, data_conf
         with torch.no_grad():
             for i in range(len(graph_batch)):
                 graph_batch[i].to(device)
-            vae_loss, recon_loss, kl_loss, pred = model(graph_batch)
-            pred = pred.view(-1)
+            vae_loss, recon_loss, kl_loss, pred, _ = model(graph_batch)
 
             if args.on_valid:
                 acc_loss = criterion(pred.view(-1), graph_batch[0].valid_acc)
@@ -280,12 +284,13 @@ def infer(val_data, model, criterion, optimizer, epoch, device, alpha, data_conf
                 acc_loss = criterion(pred.view(-1), graph_batch[0].train_acc)
             loss = alpha * vae_loss + (1 - alpha) * acc_loss
 
-            preds.extend((pred.detach().cpu().numpy()))
+            pred_np = pred.detach().cpu().numpy()
+            preds.extend(pred_np)
 
             if args.on_valid:
-                targets.extend(graph_batch[0].valid_acc.detach().cpu().numpy())
+                targets.extend(graph_batch[0].valid_acc.detach().cpu().numpy().reshape(pred_np.shape[0], data_config['hp']))
             else:
-                targets.extend(graph_batch[0].train_acc.detach().cpu().numpy())
+                targets.extend(graph_batch[0].train_acc.detach().cpu().numpy().reshape(pred_np.shape[0], data_config['hp']))
 
         n = graph_batch[0].num_graphs
         objs.update(loss.data.item(), n)
@@ -304,6 +309,7 @@ def infer(val_data, model, criterion, optimizer, epoch, device, alpha, data_conf
         file.write('\n')
 
     logging.info('val %03d %.5f', step, objs.avg)
+    print(np.array(targets).shape, np.array(preds).shape)
     val_results = util.evaluate_metrics(np.array(targets), np.array(preds), prediction_is_first_arg=False)
     logging.info('val metrics:  %s', val_results)
     return objs.avg, val_results

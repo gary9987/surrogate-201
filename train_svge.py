@@ -123,8 +123,7 @@ def main(args, log_dir):
     scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.1, patience=10, verbose=True)
     print('model initialed')
 
-    # It takes long time to count.
-    #logging.info("param size = %fMB", util.count_parameters_in_MB(model))
+    logging.info("param size = %fMB", util.count_parameters_in_MB(model))
 
     if not args.only_test_mode:
 
@@ -208,9 +207,10 @@ def train(data, model, optimizer, epoch, device, log_dir):
 
     model.train()
 
-    for step, graph_batch in enumerate(data.train_dataloader):
-        for i in range(len(graph_batch)):
-            graph_batch[i].to(device)
+    for graph_batch in tqdm(data.train_dataloader):
+        #for i in range(len(graph_batch)):
+        #    graph_batch[i].to(device)
+        graph_batch = [i.to(device) for i in graph_batch]
         loss, recon_loss, kl_loss = model(graph_batch)
         optimizer.zero_grad()
         loss.backward()
@@ -231,7 +231,7 @@ def train(data, model, optimizer, epoch, device, log_dir):
             json.dump(str(config_dict), file)
             file.write('\n')
 
-    logging.info('train %03d %.5f', step, objs.avg)
+    logging.info('train %.5f', objs.avg)
 
     return objs.avg
 

@@ -1,7 +1,7 @@
 {
     "train_data_path": "data/nb201_train_cifar10_valid_converged.pth",
     "test_data_path":"data/nb201_test_cifar10_valid_converged.pth",
-    "batch_size": 1,
+    "batch_size": 32,
     "hp": 200,
     "nb201_seed": 777,
     "num_workers": 4,

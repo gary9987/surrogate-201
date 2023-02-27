@@ -608,9 +608,9 @@ class SVGE_acc(nn.Module):
         kl_loss = -0.5 * torch.sum(1 + h_G_var - h_G_mean.pow(2) - h_G_var.exp())
         recon_loss = self.Decoder(batch_list[1:], c, batch_list[0].nodes)
 
-        return recon_loss + self.beta * kl_loss, recon_loss, kl_loss, acc
+        return recon_loss + self.beta * kl_loss, recon_loss, kl_loss, acc, h_G_mean
 
-    def inference(self, data, sample=False, log_var=None, only_acc=False):
+    def inference(self, data, sample=False, log_var=None, only_acc=False, only_embedding=False):
         if isinstance(data, torch.Tensor):
             if data.size(-1) != self.gdim:
                 raise Exception('Size of input is {}, must be {}'.format(data.size(0), self.ndim * 2))
@@ -622,6 +622,9 @@ class SVGE_acc(nn.Module):
             if not data.__contains__('batch'):
                 data.batch = torch.LongTensor([0]).to(data.edge_index.device)
             mean, log_var = self.Encoder(data.edge_index, data.node_atts, data.batch)
+
+        if only_embedding:
+            return mean
 
         acc = self.Accuracy(mean)
 
@@ -636,7 +639,7 @@ class SVGE_acc(nn.Module):
 
         edges, node_atts, edge_list = self.Decoder.inference(c)
 
-        return edges, node_atts, edge_list, mean, log_var, c, acc
+        return edges, node_atts, edge_list, mean, log_var, c, acc, mean
 
     def number_of_parameters(self):
         return (sum(p.numel() for p in self.parameters() if p.requires_grad))

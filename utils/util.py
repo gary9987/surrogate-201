@@ -18,6 +18,12 @@ import scipy
 import gzip
 import collections
 import pygraphviz as pgv
+from metrics import (
+    get_final_epoch_kt,
+    get_final_epoch_r2,
+    get_avg_kt,
+    get_avg_r2
+)
 
 sys.path.append('%s/..' % os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, '../')
@@ -78,8 +84,11 @@ def evaluate_metrics(y_true, y_pred, prediction_is_first_arg):
     metrics_dict = dict()
     metrics_dict["mse"] = mean_squared_error(y_true, y_pred)
     metrics_dict["rmse"] = np.sqrt(mean_squared_error(y_true, y_pred))
-    metrics_dict["kendall_tau"], p_val = kendalltau(y_true, y_pred)
-    metrics_dict["spearmanr"] = spearmanr(y_true, y_pred).correlation
+    metrics_dict["avg KT"], _ = get_avg_kt(y_pred, y_true)
+    metrics_dict["final KT"], _ = get_final_epoch_kt(y_pred, y_true)
+    metrics_dict["avg r2"] = get_avg_r2(y_pred, y_true)
+    metrics_dict["final r2"] = get_final_epoch_r2(y_pred, y_true)
+    #metrics_dict["spearmanr"] = spearmanr(y_true, y_pred).correlation
 
     return metrics_dict
 
