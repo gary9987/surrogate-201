@@ -17,8 +17,10 @@ def train_valid_test_split_dataset(data, ratio=[0.8, 0.1, 0.1], shuffle=False, s
     if len(ratio) == 2:
         split_va = int(ratio[0] * len(data))
         idx_tr, idx_va = np.split(idxs, [split_va])
-        ret['train'] = data[idx_tr]
-        ret['valid'] = data[idx_va]
+        #ret['train'] = data[idx_tr]
+        ret['train'] = [data[i] for i in idx_tr]
+        ret['valid'] = [data[i] for i in idx_va]
+        #ret['valid'] = data[idx_va]
     elif len(ratio) == 3:
         split_va, split_te = int(ratio[0] * len(data)), int((ratio[0] + ratio[1]) * len(data))
         idx_tr, idx_va, idx_te = np.split(idxs, [split_va, split_te])

@@ -10,7 +10,7 @@ from torch_geometric.utils import to_dense_adj
 import torch.nn.functional as F
 from collections import OrderedDict
 from datasets.nb201_dataset import NasBench201Dataset
-from datasets.utils_data import prep_data
+from datasets.utils_data import prep_data, train_valid_test_split_dataset
 
 class Dataset:
 
@@ -121,15 +121,9 @@ class Dataset:
 
     ##########################################################################
     @staticmethod
-    def sample(dataset,
-               seed=999
-               ):
-        random_shuffle = np.random.permutation(range(len(dataset)))
-
-        train_data = [dataset[i] for i in random_shuffle[:int(len(dataset) * 0.9)]]
-        test_data = [dataset[i] for i in random_shuffle[int(len(dataset) * 0.9):]]
-
-        return train_data, test_data
+    def sample(dataset, shuffle=True, shuffle_seed=0):
+        data_dict = train_valid_test_split_dataset(dataset, ratio=[0.9, 0.1], shuffle=shuffle, shuffle_seed=shuffle_seed)
+        return data_dict['train'], data_dict['valid']
 
     ##########################################################################
     '''

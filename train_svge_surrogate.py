@@ -16,12 +16,9 @@ from scipy.io import loadmat
 import torch
 import torch.nn as nn
 from datetime import datetime
-
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch_geometric.data import Data, DataLoader
-
 from ConfigSpace.read_and_write import json as config_space_json_r_w
-
 from utils import util
 from datasets.utils_data import prep_data
 from models.SVGe import SVGE_acc, SVGE
@@ -40,6 +37,7 @@ parser.add_argument('--save_interval', type=int, default=50, help='how many epoc
 parser.add_argument('--seed', type=int, default=1, help='random seed (default: 1)')
 parser.add_argument('--checkpoint', type=int, default=300, help='Which checkpoint of trained model to load')
 parser.add_argument('--on_valid', type=int, default=1, help='if predict on valid acc')
+parser.add_argument('--finetune_SVGE', action='store_true', help='if fine tuning SVGE pretrained model', default=False)
 parser.add_argument('--sample_amount', type=int, default=14061,
                     help='fine tuning VAE and surrogate on 1000 training data')
 
@@ -150,10 +148,21 @@ def main(args):
     path_state_dict = args.path_state_dict
     checkpoint = args.checkpoint
     m = torch.load(os.path.join(path_state_dict, f"model_checkpoint{checkpoint}.obj"), map_location=device)
+    for k in m:
+        logging.info(f'{k}')
+
     m = {k: v for k, v in m.items() if k in model_dict}
 
     model_dict.update(m)
     model.load_state_dict(model_dict)
+
+    if not args.finetune_SVGE:
+        for name, param in model.named_parameters():
+            if name in m:
+                logging.info("Freeze the weight of %s", name)
+                param.required_grad = False
+
+    logging.info("param size = %fMB", util.count_parameters_in_MB(model))
 
     optimizer = torch.optim.Adam(model.parameters(), lr=model_config['regression_learning_rate'])
     scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.1, patience=10, verbose=True)
