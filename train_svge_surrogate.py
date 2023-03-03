@@ -148,8 +148,6 @@ def main(args):
     path_state_dict = args.path_state_dict
     checkpoint = args.checkpoint
     m = torch.load(os.path.join(path_state_dict, f"model_checkpoint{checkpoint}.obj"), map_location=device)
-    for k in m:
-        logging.info(f'{k}')
 
     m = {k: v for k, v in m.items() if k in model_dict}
 
