@@ -35,7 +35,7 @@
       "log": true,
       "lower": 16,
       "upper": 512,
-      "default": 256
+      "default": 384
     },
     {
       "name": "gnn_iteration_layers",
