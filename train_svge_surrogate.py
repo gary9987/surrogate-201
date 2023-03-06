@@ -39,7 +39,7 @@ parser.add_argument('--checkpoint', type=int, default=300, help='Which checkpoin
 parser.add_argument('--on_valid', type=int, default=1, help='if predict on valid acc')
 parser.add_argument('--finetune_SVGE', action='store_true', help='if fine tuning SVGE pretrained model', default=False)
 parser.add_argument('--sample_amount', type=int, default=14061,
-                    help='fine tuning VAE and surrogate on 1000 training data')
+                    help='fine tuning VAE and surrogate on 14061 training data')
 
 args = parser.parse_args()
 
