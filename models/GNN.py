@@ -2,6 +2,7 @@ import tensorflow.keras.layers
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Dense
 from spektral.layers import GINConvBatch, GlobalSumPool, GlobalMaxPool, GlobalAvgPool, DiffPool
+import tensorflow as tf
 
 
 class Graph_Model(Model):
@@ -29,3 +30,22 @@ class Graph_Model(Model):
         out = self.dropout(out)
         out = self.dense(out)
         return out
+
+
+def bpr_loss(y_true, y_pred):
+    total_loss = []
+
+    N = y_true.shape[0]  # y_true.shape[0] = batch size
+    lc_length = y_true.shape[1]
+
+    for i in range(lc_length):
+        loss_value = 0
+        for j in range(N):
+            loss_value += tf.reduce_sum(tf.keras.backend.switch(y_true[:, i] > y_true[j, i],
+                                                                -tf.math.log(tf.sigmoid(y_pred[:, i] - y_pred[j, i])),
+                                                                0))
+        total_loss.append(loss_value)
+
+    total_loss = tf.stack(total_loss, 0)
+
+    return total_loss / N ** 2

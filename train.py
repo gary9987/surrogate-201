@@ -1,6 +1,6 @@
 from keras.callbacks import EarlyStopping, CSVLogger
-from datasets.transformation import ReshapeYTransform, OnlyValidAccTransform
-from models.GNN import Graph_Model
+from transformation import ReshapeYTransform, OnlyValidAccTransform
+from model import Graph_Model, bpr_loss
 import tensorflow as tf
 import logging
 import sys
@@ -88,7 +88,7 @@ if __name__ == '__main__':
             datasets[key].apply(ReshapeYTransform())
 
 
-    model.compile('adam', 'mae')
+    model.compile('adam', loss=bpr_loss)
 
     loader = {key: BatchLoader(datasets[key], batch_size=batch_size, shuffle=True if key != 'test' else False) for key in datasets}
     model.fit(loader['train'].load(), steps_per_epoch=loader['train'].steps_per_epoch,
