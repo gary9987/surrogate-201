@@ -1,6 +1,6 @@
 from keras.callbacks import EarlyStopping, CSVLogger
-from transformation import ReshapeYTransform, OnlyValidAccTransform
-from model import Graph_Model, bpr_loss
+from datasets.transformation import ReshapeYTransform, OnlyValidAccTransform
+from models.GNN import Graph_Model, bpr_loss
 import tensorflow as tf
 import logging
 import sys
