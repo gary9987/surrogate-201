@@ -33,19 +33,21 @@ class Graph_Model(Model):
 
 
 def bpr_loss(y_true, y_pred):
-    total_loss = []
 
-    N = y_true.shape[0]  # y_true.shape[0] = batch size
-    lc_length = y_true.shape[1]
+    N = tf.shape(y_true)[0]  # y_true.shape[0] = batch size
+    lc_length = tf.shape(y_true)[1]
+
+    total_loss = tf.constant([])
 
     for i in range(lc_length):
-        loss_value = 0
+        tf.autograph.experimental.set_loop_options(
+            shape_invariants=[(total_loss, tf.TensorShape([None]))]
+        )
+        loss_value = 0.0
         for j in range(N):
             loss_value += tf.reduce_sum(tf.keras.backend.switch(y_true[:, i] > y_true[j, i],
                                                                 -tf.math.log(tf.sigmoid(y_pred[:, i] - y_pred[j, i])),
                                                                 0))
-        total_loss.append(loss_value)
+        total_loss = tf.concat([total_loss, tf.expand_dims(loss_value, 0)], 0)
 
-    total_loss = tf.stack(total_loss, 0)
-
-    return total_loss / N ** 2
+    return total_loss / tf.cast(N, tf.float32) ** 2
