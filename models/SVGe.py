@@ -18,6 +18,32 @@ from torch_geometric.nn.inits import glorot, zeros
 from torch_geometric.utils import softmax, scatter_, subgraph
 
 
+class BPRLoss(torch.nn.Module):
+    def __init__(self, device, reduction='mean'):
+        assert reduction in ['mean', 'sum']
+        self.reduction = reduction
+        self.device = device
+        super(BPRLoss, self).__init__()
+
+    def forward(self, y_pred, y_true):
+        N = y_true.shape[0] # y_true.shape[0] = batch size
+        lc_length = y_true.shape[1]
+
+        total_loss = []
+
+        for i in range(lc_length):
+            loss_value = 0.0
+            for j in range(N):
+                loss_value += torch.sum(torch.where(y_true[:, i] > y_true[j, i],
+                                        -torch.log(torch.sigmoid(y_pred[:, i] - y_pred[j, i])),
+                                        torch.tensor(0.0).to(self.device))) # replace tf.keras.backend.switch with torch.where
+            total_loss.append(loss_value)
+
+        if self.reduction == 'mean':
+            return torch.mean(torch.stack(total_loss)) / N ** 2
+        elif self.reduction == 'sum':
+            return torch.sum(torch.stack(total_loss)) / N ** 2
+
 def edges2index(edges, finish=False):
     device = edges.device
     batch_size, size = edges.size()

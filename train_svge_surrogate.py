@@ -15,13 +15,14 @@ import time
 from scipy.io import loadmat
 import torch
 import torch.nn as nn
+from torch.nn import MSELoss
 from datetime import datetime
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch_geometric.data import Data, DataLoader
 from ConfigSpace.read_and_write import json as config_space_json_r_w
 from utils import util
 from datasets.utils_data import prep_data
-from models.SVGe import SVGE_acc, SVGE
+from models.SVGe import SVGE_acc, SVGE, BPRLoss
 
 
 import argparse
@@ -40,6 +41,10 @@ parser.add_argument('--on_valid', type=int, default=1, help='if predict on valid
 parser.add_argument('--finetune_SVGE', action='store_true', help='if fine tuning SVGE pretrained model', default=False)
 parser.add_argument('--sample_amount', type=int, default=14061,
                     help='fine tuning VAE and surrogate on 14061 training data')
+parser.add_argument('--criterion', type=str, default='MSELoss',
+                    help='criterion function MSELoss or BPRLoss')
+parser.add_argument('--criterion_reduction', type=str, default='sum',
+                    help='criterion reduction mean or sum')
 
 args = parser.parse_args()
 
@@ -165,7 +170,12 @@ def main(args):
     optimizer = torch.optim.Adam(model.parameters(), lr=model_config['regression_learning_rate'])
     scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.1, patience=10, verbose=True)
     alpha = model_config['regression_loss_proportion']
-    criterion = nn.MSELoss()
+    if args.criterion == 'MSELoss':
+        criterion = eval(args.criterion)(reduction=args.criterion_reduction)
+    elif args.criterion == 'BPRLoss':
+        criterion = eval(args.criterion)(device, reduction=args.criterion_reduction)
+    else:
+        criterion = eval(args.criterion)()
 
     ##############################################################################
     #
@@ -229,18 +239,22 @@ def train(train_data, model, criterion, optimizer, epoch, device, alpha, data_co
         # pred = pred.view(-1)
         # pred.shape = (batch_size, 200)
         if args.on_valid:
-            acc_loss = criterion(pred.view(-1), graph_batch[0].valid_acc)
+            acc_loss = criterion(pred, torch.reshape(graph_batch[0].valid_acc, (pred.size(0), pred.size(1))))
         else:
-            acc_loss = criterion(pred.view(-1), graph_batch[0].train_acc)
-        loss = alpha * vae_loss + (1 - alpha) * acc_loss
+            acc_loss = criterion(pred, torch.reshape(graph_batch[0].train_acc, (pred.size(0), pred.size(1))))
+
+        if args.criterion_reduction == 'sum':
+            loss = alpha * pred.size(1) * vae_loss + (1 - alpha) * acc_loss
+        elif args.criterion_reduction == 'mean':
+            loss = alpha * vae_loss + (1 - alpha) * acc_loss
 
         pred_np = pred.detach().cpu().numpy()
         preds.extend(pred_np)
 
         if args.on_valid:
-            targets.extend(graph_batch[0].valid_acc.detach().cpu().numpy().reshape(pred_np.shape[0], data_config['hp']))
+            targets.extend(graph_batch[0].valid_acc.detach().cpu().numpy().reshape(pred_np.shape[0], pred_np.shape[1]))
         else:
-            targets.extend(graph_batch[0].train_acc.detach().cpu().numpy().reshape(pred_np.shape[0], data_config['hp']))
+            targets.extend(graph_batch[0].train_acc.detach().cpu().numpy().reshape(pred_np.shape[0], pred_np.shape[1]))
 
         optimizer.zero_grad()
         loss.backward()
@@ -286,18 +300,18 @@ def infer(val_data, model, criterion, optimizer, epoch, device, alpha, data_conf
             vae_loss, recon_loss, kl_loss, pred, _ = model(graph_batch)
 
             if args.on_valid:
-                acc_loss = criterion(pred.view(-1), graph_batch[0].valid_acc)
+                acc_loss = criterion(pred, torch.reshape(graph_batch[0].valid_acc, (pred.size(0), pred.size(1))))
             else:
-                acc_loss = criterion(pred.view(-1), graph_batch[0].train_acc)
+                acc_loss = criterion(pred, torch.reshape(graph_batch[0].train_acc, (pred.size(0), pred.size(1))))
             loss = alpha * vae_loss + (1 - alpha) * acc_loss
 
             pred_np = pred.detach().cpu().numpy()
             preds.extend(pred_np)
 
             if args.on_valid:
-                targets.extend(graph_batch[0].valid_acc.detach().cpu().numpy().reshape(pred_np.shape[0], data_config['hp']))
+                targets.extend(graph_batch[0].valid_acc.detach().cpu().numpy().reshape(pred_np.shape[0], pred_np.shape[1]))
             else:
-                targets.extend(graph_batch[0].train_acc.detach().cpu().numpy().reshape(pred_np.shape[0], data_config['hp']))
+                targets.extend(graph_batch[0].train_acc.detach().cpu().numpy().reshape(pred_np.shape[0], pred_np.shape[1]))
 
         n = graph_batch[0].num_graphs
         objs.update(loss.data.item(), n)
@@ -316,7 +330,6 @@ def infer(val_data, model, criterion, optimizer, epoch, device, alpha, data_conf
         file.write('\n')
 
     logging.info('val %03d %.5f', step, objs.avg)
-    print(np.array(targets).shape, np.array(preds).shape)
     val_results = util.evaluate_metrics(np.array(targets), np.array(preds), prediction_is_first_arg=False)
     logging.info('val metrics:  %s', val_results)
     return objs.avg, val_results
