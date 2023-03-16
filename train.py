@@ -1,3 +1,4 @@
+import argparse
 from keras.callbacks import EarlyStopping, CSVLogger
 from datasets.transformation import ReshapeYTransform, OnlyValidAccTransform
 from models.GNN import Graph_Model, bpr_loss
@@ -60,6 +61,13 @@ mse
 
 '''
 
+parser = argparse.ArgumentParser(description='train GIN')
+parser.add_argument('--train_sample_amount', type=int, default=900, help='Number of samples to train (default: 900)')
+parser.add_argument('--valid_sample_amount', type=int, default=100, help='Number of samples to train (default: 100)')
+parser.add_argument('--criterion', type=str, default='mse', help='loss function for training (mse, bpr)')
+args = parser.parse_args()
+
+
 tf.random.set_seed(777)
 
 if __name__ == '__main__':
@@ -81,6 +89,9 @@ if __name__ == '__main__':
                                               shuffle=True,
                                               shuffle_seed=0)
 
+    datasets['train'] = datasets['train'][:args.train_sample_amount]
+    datasets['valid'] = datasets['valid'][:args.valid_sample_amount]
+
     for key in datasets:
         if is_only_validation_data:
             datasets[key].apply(OnlyValidAccTransform())
@@ -88,9 +99,17 @@ if __name__ == '__main__':
             datasets[key].apply(ReshapeYTransform())
 
 
-    model.compile('adam', loss=bpr_loss)
+    if args.criterion == 'mse':
+        criterion = tf.keras.losses.MeanSquaredError()
+    elif args.criterion == 'bpr':
+        criterion = bpr_loss
+    else:
+        raise ValueError(f'args.criterion {args.criterion} is not supported')
+
+    model.compile(tf.keras.optimizers.Adam(), loss=criterion)
 
     loader = {key: BatchLoader(datasets[key], batch_size=batch_size, shuffle=True if key != 'test' else False) for key in datasets}
+
     model.fit(loader['train'].load(), steps_per_epoch=loader['train'].steps_per_epoch,
               validation_data=loader['valid'].load(), validation_steps=loader['valid'].steps_per_epoch,
               epochs=train_epochs,
