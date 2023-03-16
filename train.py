@@ -64,7 +64,7 @@ mse
 parser = argparse.ArgumentParser(description='train GIN')
 parser.add_argument('--train_sample_amount', type=int, default=900, help='Number of samples to train (default: 900)')
 parser.add_argument('--valid_sample_amount', type=int, default=100, help='Number of samples to train (default: 100)')
-parser.add_argument('--criterion', type=str, default='mse', help='loss function for training (mse, bpr)')
+parser.add_argument('--criterion', type=str, default='mse', help='loss function for training (mse, bpr, mae)')
 args = parser.parse_args()
 
 
@@ -101,6 +101,8 @@ if __name__ == '__main__':
 
     if args.criterion == 'mse':
         criterion = tf.keras.losses.MeanSquaredError()
+    elif args.criterion == 'mae':
+        criterion = tf.keras.losses.MeanAbsoluteError()
     elif args.criterion == 'bpr':
         criterion = bpr_loss
     else:
@@ -116,7 +118,7 @@ if __name__ == '__main__':
               callbacks=[EarlyStopping(patience=patience, restore_best_weights=True),
                          CSVLogger(f"learning_curve.log")]
               )
-    model.save('model')
+    model.save(f'model_{args.criterion}_train{args.train_sample_amount}_valid{args.valid_sample_amount}')
 
     logger.info(f'{model.summary()}')
     loss = model.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
