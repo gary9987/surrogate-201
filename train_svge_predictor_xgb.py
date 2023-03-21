@@ -38,7 +38,7 @@ def train(model_output_dir, run: int, data_size: int):
         'learning_rate': 0.00824,
         'booster': 'gbtree',
         'early_stopping_rounds': 100,
-        'random_state': 0,
+        'random_state': run,
         'objective': 'reg:squarederror',
         'eval_metric': ['rmse', 'mae'],
         'tree_method': 'gpu_hist'  # GPU
