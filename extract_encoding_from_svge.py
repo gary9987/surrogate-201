@@ -1,5 +1,6 @@
 import logging
 import pickle
+
 logging.basicConfig(format="%(asctime)s %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 import warnings
@@ -24,11 +25,10 @@ from utils import util
 from datasets.utils_data import prep_data
 from models.SVGe import SVGE_acc, SVGE, BPRLoss
 
-
 import argparse
 
 parser = argparse.ArgumentParser(description='SVGE Encoding')
-parser.add_argument('--model', type=str, default='SVGE')
+parser.add_argument('--model', type=str, default='SVGE_acc')
 parser.add_argument('--name', type=str, default='Train_PP')
 parser.add_argument('--data_search_space', choices=['NB101', 'NB201'],
                     help='which search space for learning autoencoder', default='NB201')
@@ -112,7 +112,8 @@ def main(args):
     print("Creating Dataset.")
     if args.data_search_space == 'NB201':
         from datasets.nb201_dataset_pg import Dataset as Dataset201
-        dataset = Dataset201(batch_size=data_config['batch_size'], hp=data_config['hp'], nb201_seed=data_config['nb201_seed'])
+        dataset = Dataset201(batch_size=data_config['batch_size'], hp=data_config['hp'],
+                             nb201_seed=data_config['nb201_seed'])
         print("Prepare Test Set")
         train_data = dataset.train_data
         val_data = dataset.test_data
@@ -126,29 +127,29 @@ def main(args):
     else:
         raise TypeError("Unknow Dataset: {:}".format(args.data_search_space))
 
-
     ##############################################################################
     #
     #                              Model
     #
     ##############################################################################
-    model = eval(args.model)(model_config=model_config, data_config=data_config).to(device)
+    model = eval(args.model)(model_config=model_config, data_config=data_config, dim_target=200).to(device)
     path_state_dict = args.path_state_dict
     checkpoint = args.checkpoint
-    model.load_state_dict(torch.load(os.path.join(path_state_dict, f"model_checkpoint{checkpoint}.obj"), map_location=device))
+    model.load_state_dict(
+        torch.load(os.path.join(path_state_dict, f"model_checkpoint{checkpoint}.obj"), map_location=device))
 
     logging.info("param size = %fMB", util.count_parameters_in_MB(model))
-
 
     ##############################################################################
     #
     #                              Infer
     #
     ##############################################################################
-    infer(train_data + val_data, model, device, data_config, log_dir)
+    infer(train_data, model, device, data_config, log_dir, f'{args.data_search_space}_train.pkl')
+    infer(val_data, model, device, data_config, log_dir, f'{args.data_search_space}_test.pkl')
 
 
-def infer(data, model, device, data_config, output_dir):
+def infer(data, model, device, data_config, output_dir, filename):
     encodings = []
     labels = []
 
@@ -161,13 +162,15 @@ def infer(data, model, device, data_config, output_dir):
                 graph_batch[i].to(device)
 
             mean, _ = model.Encoder(graph_batch[0].edge_index,
-                                             graph_batch[0].node_atts,
-                                             graph_batch[0].batch)
+                                    graph_batch[0].node_atts,
+                                    graph_batch[0].batch)
 
             if args.on_valid:
-                acc = torch.reshape(graph_batch[0].valid_acc, (graph_batch[0].valid_acc.size(0)//data_config['hp'], data_config['hp']))
+                acc = torch.reshape(graph_batch[0].valid_acc,
+                                    (graph_batch[0].valid_acc.size(0) // data_config['hp'], data_config['hp']))
             else:
-                acc = torch.reshape(graph_batch[0].train_acc, (graph_batch[0].train_acc.size(0)//data_config['hp'], data_config['hp']))
+                acc = torch.reshape(graph_batch[0].train_acc,
+                                    (graph_batch[0].train_acc.size(0) // data_config['hp'], data_config['hp']))
 
             encoding = mean.detach().cpu().numpy()
             label = acc.detach().cpu().numpy()
@@ -175,8 +178,7 @@ def infer(data, model, device, data_config, output_dir):
             encodings.extend(encoding)
             labels.extend(label)
 
-
-    with open(os.path.join(output_dir, f'{args.data_search_space}_encodings_and_labels.pkl'), 'wb') as file:
+    with open(os.path.join(output_dir, filename), 'wb') as file:
         pickle.dump({'encodings': encodings, 'labels': labels}, file)
 
 
