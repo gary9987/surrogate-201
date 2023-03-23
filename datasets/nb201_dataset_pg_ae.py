@@ -123,6 +123,18 @@ class Dataset:
 
         return acc
     '''
+    def to_TUDataset(self, root='', name='nb201'):
+        datas = {'train': self.train_data, 'test': self.test_data}
+        for key, value in datas.items():
+            output_dir = pathlib.Path(os.path.join(root, f'{name}_{key}'))
+            output_dir.mkdir(exist_ok=True)
+            for data in DataLoader(value, batch_size=len(value), shuffle=False):
+                np.savetxt(os.path.join(output_dir, f'{name}_{key}_node_attributes.txt'), data.x.numpy(), fmt='%i')
+                edge_index = data.edge_index.T.to(torch.long).numpy()
+                np.savetxt(os.path.join(output_dir, f'{name}_{key}_A.txt'), edge_index, fmt='%i')
+                y = data.valid_acc.reshape((len(value), int(self.hp)))
+                y = np.expand_dims(y[:, -1], -1)
+                np.savetxt(os.path.join(output_dir, f'{name}_{key}_graph_labels.txt'), y)
 
 
 ##############################################################################
@@ -132,18 +144,5 @@ class Dataset:
 ##############################################################################
 
 if __name__ == "__main__":
-
-    def print_keys(d, k=None, lvl=0):
-        if k is not None:
-            print(f"{'---' * (lvl)}{k}")
-        if type(d) == list and len(d) == 1:
-            d = d[0]
-        if type(d) == dict:
-            for k in d:
-                print_keys(d[k], k, lvl + 1)
-
-
-    ds = Dataset(10, '200', 777)
-    for batch in ds.train_dataloader:
-        print(batch)
-        break
+    ds = Dataset('200', 777)
+    ds.to_TUDataset()
