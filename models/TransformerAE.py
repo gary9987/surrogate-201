@@ -124,8 +124,8 @@ class Encoder(tf.keras.layers.Layer):
 
 class Decoder(tf.keras.layers.Layer):
     def __init__(self, *, num_layers, d_model, num_heads,
-                 dff, target_size, dropout_rate=0.1):
-        super().__init__()
+                 dff, dropout_rate=0.1):
+        super(Decoder, self).__init__()
 
         self.d_model = d_model
         self.num_layers = num_layers
@@ -162,7 +162,7 @@ class TransformerAutoencoder(tf.keras.Model):
                                dff=dff, input_size=input_size, dropout_rate=dropout_rate)
 
         self.decoder = Decoder(num_layers=num_layers, d_model=d_model, num_heads=num_heads,
-                               dff=dff, target_size=input_size, dropout_rate=dropout_rate)
+                               dff=dff, dropout_rate=dropout_rate)
 
     def call(self, inputs):
         context = inputs
@@ -179,8 +179,61 @@ class TransformerAutoencoder(tf.keras.Model):
     def decode(self, inputs):
         return self.decoder(inputs)
 
+
+class TransformerAutoencoderReg(TransformerAutoencoder):
+    def __init__(self, *, num_layers, d_model, num_heads, dff,
+                 input_size, dropout_rate=0.1):
+        super().__init__(num_layers=num_layers, d_model=d_model, num_heads=num_heads, dff=dff, input_size=input_size, dropout_rate=dropout_rate)
+        self.reg_mlp = RegMLP(h_dim=dff, target_dim=1, dropout_rate=dropout_rate)
+
+    def call(self, inputs):
+
+        latent = self.encoder(inputs)  # (batch_size, context_len, d_model)
+
+        # Regression
+        reg = self.reg_mlp(tf.reshape(latent, (tf.shape(latent)[0], -1)))  # (batch_size, 1)
+        # Reconstruction
+        rec = self.decoder(latent)  # (batch_size, target_len, d_model)
+
+        # Return the final output and the attention weights.
+        return rec, reg
+
+
+class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
+  def __init__(self, d_model, warmup_steps=4000):
+    super().__init__()
+
+    self.d_model = d_model
+    self.d_model = tf.cast(self.d_model, tf.float32)
+
+    self.warmup_steps = warmup_steps
+
+  def __call__(self, step):
+    step = tf.cast(step, dtype=tf.float32)
+    arg1 = tf.math.rsqrt(step)
+    arg2 = step * (self.warmup_steps ** -1.5)
+
+    return tf.math.rsqrt(self.d_model) * tf.math.minimum(arg1, arg2)
+
+
+class RegMLP(tf.keras.layers.Layer):
+    def __init__(self, h_dim, target_dim=1, dropout_rate=0.1):
+        super().__init__()
+        self.seq = tf.keras.Sequential([
+            tf.keras.layers.Dropout(dropout_rate),
+            tf.keras.layers.Dense(h_dim, activation='relu'),
+            tf.keras.layers.Dropout(dropout_rate),
+            tf.keras.layers.Dense(h_dim // 2, activation='relu'),
+            tf.keras.layers.Dense(target_dim)
+        ])
+
+    def call(self, x):
+        x = self.seq(x)
+        return x
+
+
 if __name__ == '__main__':
-    model = TransformerAutoencoder(num_layers=3, d_model=64, num_heads=3, dff=128, input_size=28)
+    model = TransformerAutoencoder(num_layers=3, d_model=16, num_heads=3, dff=128, input_size=28)
     model.compile('adam', loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False))
     train = np.random.randint(0, 2, (1024, 28))
 
