@@ -1,7 +1,7 @@
 import numpy.random
 import tensorflow as tf
 import numpy as np
-
+from invertible_neural_networks.flow import NVP
 
 def positional_encoding(length, depth):
     depth = depth / 2
@@ -177,7 +177,7 @@ class TransformerAutoencoder(tf.keras.Model):
         return self.encoder(inputs)
 
     def decode(self, inputs):
-        return self.decoder(inputs)
+        return tf.argmax(self.decoder(inputs), axis=-1)
 
 
 class TransformerAutoencoderReg(TransformerAutoencoder):
@@ -197,6 +197,34 @@ class TransformerAutoencoderReg(TransformerAutoencoder):
 
         # Return the final output and the attention weights.
         return rec, reg
+
+
+class TransformerAutoencoderNVP(TransformerAutoencoder):
+    def __init__(self, *, num_layers, d_model, num_heads, dff,
+                 input_size, nvp_config, dropout_rate=0.1):
+        super().__init__(num_layers=num_layers, d_model=d_model, num_heads=num_heads, dff=dff, input_size=input_size, dropout_rate=dropout_rate)
+        self.nvp = NVP(inp_dim=d_model * input_size, **nvp_config)
+
+    def call(self, inputs):
+
+        latent = self.encoder(inputs)  # (batch_size, context_len, d_model)
+        flat_encoding = tf.reshape(latent, (tf.shape(latent)[0], -1))
+
+        # Regression
+        reg = self.nvp(flat_encoding)  # (batch_size, 1)
+        # Reconstruction
+        rec = self.decoder(latent)  # (batch_size, target_len, d_model)
+
+        # Return the final output and the attention weights.
+        return rec, reg, flat_encoding
+
+    def encode(self, inputs, training=True):
+        encoding = self.encoder(inputs, training=training)
+        flat_encoding = tf.reshape(encoding, (tf.shape(encoding)[0], -1))
+        return flat_encoding
+
+    def inverse(self, z):
+        return self.nvp.inverse(z)
 
 
 class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):

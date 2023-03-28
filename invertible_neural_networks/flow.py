@@ -235,6 +235,7 @@ def MMD_multiscale(x, y):
     return tf.reduce_mean(XX + YY - 2.*XY)
 
 
+
 if __name__ == "__main__":
     inp_dim = 2
     n_couple_layer = 3
