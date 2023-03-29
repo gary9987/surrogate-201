@@ -148,7 +148,7 @@ if __name__ == '__main__':
     is_only_validation_data = True
     label_epochs = 200
 
-    d_model = 2
+    d_model = 4
     dff = 128
     num_layers = 3
     num_heads = 3
