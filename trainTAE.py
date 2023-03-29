@@ -22,8 +22,8 @@ logger.addHandler(handler)
 
 
 parser = argparse.ArgumentParser(description='train TAE')
-#parser.add_argument('--train_sample_amount', type=int, default=900, help='Number of samples to train (default: 900)')
-#parser.add_argument('--valid_sample_amount', type=int, default=100, help='Number of samples to train (default: 100)')
+parser.add_argument('--train_sample_amount', type=int, default=1000, help='Number of samples to train (default: 900)')
+parser.add_argument('--valid_sample_amount', type=int, default=100, help='Number of samples to train (default: 100)')
 args = parser.parse_args()
 
 
@@ -31,9 +31,15 @@ random_seed = 0
 tf.random.set_seed(random_seed)
 
 
-def to_NVP_data(graph_dataset, z_dim):
+def to_NVP_data(graph_dataset, z_dim, reg_size):
     features = []
     y_list = []
+    if reg_size == -1:
+        nan_size = 0
+    else:
+        nan_size = len(graph_dataset) - reg_size
+
+    to_nan_idx = np.random.choice(range(len(graph_dataset)), nan_size, replace=False)
 
     for data in graph_dataset:
         x = np.reshape(data.x, -1)
@@ -47,6 +53,7 @@ def to_NVP_data(graph_dataset, z_dim):
     y_list = np.array(y_list)
     z = np.random.multivariate_normal([0.] * z_dim, np.eye(z_dim), y_list.shape[0])
     y_list = np.concatenate([z, y_list], axis=-1)
+    y_list[to_nan_idx, :] = np.nan
 
     return np.array(features).astype(np.float32), np.array(y_list).astype(np.float32)
 
@@ -61,7 +68,7 @@ class Trainer(tf.keras.Model):
         self.z_dim = z_dim
 
         # For rec loss weight
-        self.w0 = 5.
+        self.w0 = 1.
         # For reg loss weight
         self.w1 = 5
         # For latent loss weight
@@ -79,6 +86,7 @@ class Trainer(tf.keras.Model):
         y = y_batch_train[:, -y_dim:]
         z = y_batch_train[:, :z_dim]
         y_short = tf.concat([z, y], axis=-1)
+        non_nan_idx = tf.reshape(tf.where(~tf.math.is_nan(tf.reduce_sum(y_batch_train, axis=-1))), -1)
 
         # Open a GradientTape to record the operations run
         # during the forward pass, which enables auto-differentiation.
@@ -91,8 +99,10 @@ class Trainer(tf.keras.Model):
             rec_logits, y_out, x_encoding = self.model(x_batch_train, training=True)  # Logits for this minibatch
 
             rec_loss = self.rec_loss_fn(x_batch_train, rec_logits)
-            reg_loss = self.reg_loss_fn(y_batch_train[:, z_dim:], y_out[:, z_dim:])
-            latent_loss = self.loss_latent(y_short, tf.concat([y_out[:, :z_dim], y_out[:, -y_dim:]], axis=-1))  # * x_batch_train.shape[0]
+            reg_loss = self.reg_loss_fn(tf.gather(y_batch_train[:, z_dim:], non_nan_idx),
+                                        tf.gather(y_out[:, z_dim:], non_nan_idx))
+            latent_loss = self.loss_latent(tf.gather(y_short, non_nan_idx),
+                                           tf.gather(tf.concat([y_out[:, :z_dim], y_out[:, -y_dim:]], axis=-1), non_nan_idx))  # * x_batch_train.shape[0]
             forward_loss = self.w0 * rec_loss + self.w1 * reg_loss + self.w2 * latent_loss
 
         grads = tape.gradient(forward_loss, self.model.trainable_weights)
@@ -110,9 +120,9 @@ class Trainer(tf.keras.Model):
         with tf.GradientTape() as tape:
             self.model.decoder.trainable = False
             _, _, x_encoding = self.model(x_batch_train, training=True)  # Logits for this minibatch
-            x_rev = self.model.inverse(y_batch_train)
-            rev_loss = self.loss_backward(x_rev, x_encoding)  # * x_batch_train.shape[0]
-            loss =  self.w3 * rev_loss
+            x_rev = self.model.inverse(tf.gather(y_batch_train, non_nan_idx))
+            rev_loss = self.loss_backward(x_rev, tf.gather(x_encoding, non_nan_idx))  # * x_batch_train.shape[0]
+            loss = self.w3 * rev_loss
 
         grads = tape.gradient(loss, self.model.trainable_weights)
         optimizer.apply_gradients(zip(grads, self.model.trainable_weights))
@@ -124,6 +134,25 @@ class Trainer(tf.keras.Model):
                 'latent_loss': latent_loss,
                 'rev_loss': rev_loss}
 
+    def test_step(self, data):
+        x_batch_train, y_batch_train = data
+        y = y_batch_train[:, -y_dim:]
+        z = y_batch_train[:, :z_dim]
+        y_short = tf.concat([z, y], axis=-1)
+
+        rec_logits, y_out, x_encoding = self.model(x_batch_train, training=False)  # Logits for this minibatch
+
+        rec_loss = self.rec_loss_fn(x_batch_train, rec_logits)
+        reg_loss = self.reg_loss_fn(y_batch_train[:, z_dim:], y_out[:, z_dim:])
+        latent_loss = self.loss_latent(y_short, tf.concat([y_out[:, :z_dim], y_out[:, -y_dim:]], axis=-1))  # * x_batch_train.shape[0]
+        x_rev = self.model.inverse(y_batch_train)
+        rev_loss = self.loss_backward(x_rev, x_encoding)  # * x_batch_train.shape[0]
+
+        return {'total_loss': self.w0 * rec_loss + self.w1 * reg_loss + self.w2 * latent_loss + self.w3 * rev_loss,
+                'rec_loss': rec_loss,
+                'reg_loss': reg_loss,
+                'latent_loss': latent_loss,
+                'rev_loss': rev_loss}
 
 def eval(model, test_dataset, rec_loss_fn, reg_loss_fn):
     total_rec_loss = 0
@@ -159,9 +188,9 @@ if __name__ == '__main__':
         'name': 'NVP'
     }
 
-    batch_size = 256
+    batch_size = 128
     train_epochs = 100
-    patience = 20
+    patience = 100
 
     # 15624
     datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, hp=str(label_epochs), seed=777),
@@ -182,8 +211,8 @@ if __name__ == '__main__':
     y_dim = 1  # 1
     z_dim = x_dim - y_dim  # 479
 
-    x_train, y_train = to_NVP_data(datasets['train'], z_dim)
-    x_valid, y_valid = to_NVP_data(datasets['valid'], z_dim)
+    x_train, y_train = to_NVP_data(datasets['train'], z_dim, args.train_sample_amount)
+    x_valid, y_valid = to_NVP_data(datasets['valid'], z_dim, -1)
 
     learning_rate = CustomSchedule(d_model)
     optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9)
@@ -200,6 +229,7 @@ if __name__ == '__main__':
     trainer.compile(optimizer=optimizer, run_eagerly=True)
     print(len(datasets['train']))
     trainer.fit(loader['train'],
+                validation_data=loader['valid'],
                 batch_size=batch_size,
                 epochs=train_epochs,
                 callbacks=[CSVLogger(f"learning_curve.log"),
