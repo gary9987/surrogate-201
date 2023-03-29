@@ -92,9 +92,9 @@ class Trainer(tf.keras.Model):
 
             rec_loss = self.rec_loss_fn(x_batch_train, rec_logits)
             reg_loss = self.reg_loss_fn(y_batch_train[:, z_dim:], y_out[:, z_dim:])
-            latent_loss = self.loss_latent(y_short, tf.concat([y_out[:, :z_dim], y_out[:, -y_dim:]],
-                                                              axis=-1))  # * x_batch_train.shape[0]
-            forward_loss =  self.w0 * rec_loss + self.w1 * reg_loss + self.w2 * latent_loss
+            #latent_loss = self.loss_latent(y_short, tf.concat([y_out[:, :z_dim], y_out[:, -y_dim:]], axis=-1))  # * x_batch_train.shape[0]
+            latent_loss = self.loss_latent(z, y_out[:, :z_dim])  # * x_batch_train.shape[0]
+            forward_loss = self.w0 * rec_loss + self.w1 * reg_loss + self.w2 * latent_loss
 
         grads = tape.gradient(forward_loss, self.model.trainable_weights)
         optimizer.apply_gradients(zip(grads, self.model.trainable_weights))
@@ -113,7 +113,7 @@ class Trainer(tf.keras.Model):
             _, _, x_encoding = self.model(x_batch_train, training=True)  # Logits for this minibatch
             x_rev = self.model.inverse(y_batch_train)
             rev_loss = self.loss_backward(x_rev, x_encoding)  # * x_batch_train.shape[0]
-            loss =  self.w3 * rev_loss
+            loss = self.w3 * rev_loss
 
         grads = tape.gradient(loss, self.model.trainable_weights)
         optimizer.apply_gradients(zip(grads, self.model.trainable_weights))
@@ -161,7 +161,7 @@ if __name__ == '__main__':
     }
 
     batch_size = 128
-    train_epochs = 500
+    train_epochs = 100
     patience = 50
 
     # 15624
@@ -170,8 +170,8 @@ if __name__ == '__main__':
                                               shuffle=True,
                                               shuffle_seed=0)
 
-    datasets['train'] = datasets['train'][:args.train_sample_amount]
-    datasets['valid'] = datasets['valid'][:args.valid_sample_amount]
+    #datasets['train'] = datasets['train'][:args.train_sample_amount]
+    #datasets['valid'] = datasets['valid'][:args.valid_sample_amount]
 
     for key in datasets:
         if is_only_validation_data:
@@ -194,14 +194,16 @@ if __name__ == '__main__':
 
     model = TransformerAutoencoderNVP(num_layers=num_layers, d_model=d_model, num_heads=num_heads, dff=dff, input_size=x_train.shape[-1], nvp_config=nvp_config, dropout_rate=0)
 
-    loader = {'train': tf.data.Dataset.from_tensor_slices((x_train, y_train)).shuffle(1024).batch(batch_size=batch_size),
+    loader = {'train': tf.data.Dataset.from_tensor_slices((x_train, y_train)).shuffle(1024).batch(batch_size=batch_size).repeat(),
               'valid': tf.data.Dataset.from_tensor_slices((x_valid, y_valid)).batch(batch_size=batch_size)}
 
     trainer = Trainer(model, rec_loss_fn, reg_loss_fn, x_dim, y_dim, z_dim)
     trainer.compile(optimizer=optimizer, run_eagerly=True)
+    print(len(datasets['train']))
     trainer.fit(loader['train'],
                 batch_size=batch_size,
                 epochs=train_epochs,
+                steps_per_epoch=len(datasets['train']) // batch_size,
                 callbacks=[CSVLogger(f"learning_curve.log")])
 
     #eval(model, loader['valid'], rec_loss_fn, reg_loss_fn)
