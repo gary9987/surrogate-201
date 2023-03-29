@@ -22,8 +22,8 @@ logger.addHandler(handler)
 
 
 parser = argparse.ArgumentParser(description='train TAE')
-parser.add_argument('--train_sample_amount', type=int, default=900, help='Number of samples to train (default: 900)')
-parser.add_argument('--valid_sample_amount', type=int, default=100, help='Number of samples to train (default: 100)')
+#parser.add_argument('--train_sample_amount', type=int, default=900, help='Number of samples to train (default: 900)')
+#parser.add_argument('--valid_sample_amount', type=int, default=100, help='Number of samples to train (default: 100)')
 args = parser.parse_args()
 
 
@@ -61,7 +61,7 @@ class Trainer(tf.keras.Model):
         self.z_dim = z_dim
 
         # For rec loss weight
-        self.w0 = 1.
+        self.w0 = 5.
         # For reg loss weight
         self.w1 = 1.
         # For latent loss weight
@@ -88,38 +88,37 @@ class Trainer(tf.keras.Model):
             # The operations that the layer applies
             # to its inputs are going to be recorded
             # on the GradientTape.
-            rec_logits, y_out, _ = self.model(x_batch_train, training=True)  # Logits for this minibatch
+            rec_logits, y_out, x_encoding = self.model(x_batch_train, training=True)  # Logits for this minibatch
 
             rec_loss = self.rec_loss_fn(x_batch_train, rec_logits)
             reg_loss = self.reg_loss_fn(y_batch_train[:, z_dim:], y_out[:, z_dim:])
-            #latent_loss = self.loss_latent(y_short, tf.concat([y_out[:, :z_dim], y_out[:, -y_dim:]], axis=-1))  # * x_batch_train.shape[0]
-            latent_loss = self.loss_latent(z, y_out[:, :z_dim])  # * x_batch_train.shape[0]
+            latent_loss = self.loss_latent(y_short, tf.concat([y_out[:, :z_dim], y_out[:, -y_dim:]], axis=-1))  # * x_batch_train.shape[0]
             forward_loss = self.w0 * rec_loss + self.w1 * reg_loss + self.w2 * latent_loss
 
-        grads = tape.gradient(forward_loss, self.model.trainable_weights)
-        optimizer.apply_gradients(zip(grads, self.model.trainable_weights))
+            #grads = tape.gradient(forward_loss, self.model.trainable_weights)
+            #optimizer.apply_gradients(zip(grads, self.model.trainable_weights))
 
-        '''
-        # Use the gradient tape to automatically retrieve
-        # the gradients of the trainable variables with respect to the loss.
-        grads = tape.gradient(forward_loss, model.trainable_weights)
-        # Run one step of gradient descent by updating
-        # the value of the variables to minimize the loss.
-        optimizer.apply_gradients(zip(grads, model.trainable_weights))
-        '''
-        # Backward loss
-        with tf.GradientTape() as tape:
-            self.model.decoder.trainable = False
-            _, _, x_encoding = self.model(x_batch_train, training=True)  # Logits for this minibatch
+            '''
+            # Use the gradient tape to automatically retrieve
+            # the gradients of the trainable variables with respect to the loss.
+            grads = tape.gradient(forward_loss, model.trainable_weights)
+            # Run one step of gradient descent by updating
+            # the value of the variables to minimize the loss.
+            optimizer.apply_gradients(zip(grads, model.trainable_weights))
+            '''
+            # Backward loss
+            # with tf.GradientTape() as tape:
+            #self.model.decoder.trainable = False
+            #_, _, x_encoding = self.model(x_batch_train, training=True)  # Logits for this minibatch
             x_rev = self.model.inverse(y_batch_train)
             rev_loss = self.loss_backward(x_rev, x_encoding)  # * x_batch_train.shape[0]
-            loss = self.w3 * rev_loss
+            loss = forward_loss + self.w3 * rev_loss
 
         grads = tape.gradient(loss, self.model.trainable_weights)
         optimizer.apply_gradients(zip(grads, self.model.trainable_weights))
-        self.model.decoder.trainable = True
+        #self.model.decoder.trainable = True
 
-        return {'total_loss': forward_loss + loss,
+        return {'total_loss': loss,
                 'rec_loss': rec_loss,
                 'reg_loss': reg_loss,
                 'latent_loss': latent_loss,
@@ -161,8 +160,7 @@ if __name__ == '__main__':
     }
 
     batch_size = 128
-    train_epochs = 100
-    patience = 50
+    train_epochs = 50
 
     # 15624
     datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, hp=str(label_epochs), seed=777),
@@ -194,7 +192,7 @@ if __name__ == '__main__':
 
     model = TransformerAutoencoderNVP(num_layers=num_layers, d_model=d_model, num_heads=num_heads, dff=dff, input_size=x_train.shape[-1], nvp_config=nvp_config, dropout_rate=0)
 
-    loader = {'train': tf.data.Dataset.from_tensor_slices((x_train, y_train)).shuffle(1024).batch(batch_size=batch_size).repeat(),
+    loader = {'train': tf.data.Dataset.from_tensor_slices((x_train, y_train)).shuffle(1024).batch(batch_size=batch_size),
               'valid': tf.data.Dataset.from_tensor_slices((x_valid, y_valid)).batch(batch_size=batch_size)}
 
     trainer = Trainer(model, rec_loss_fn, reg_loss_fn, x_dim, y_dim, z_dim)
@@ -203,7 +201,6 @@ if __name__ == '__main__':
     trainer.fit(loader['train'],
                 batch_size=batch_size,
                 epochs=train_epochs,
-                steps_per_epoch=len(datasets['train']) // batch_size,
                 callbacks=[CSVLogger(f"learning_curve.log")])
 
     #eval(model, loader['valid'], rec_loss_fn, reg_loss_fn)
