@@ -92,8 +92,8 @@ class Trainer(tf.keras.Model):
 
             rec_loss = self.rec_loss_fn(x_batch_train, rec_logits)
             reg_loss = self.reg_loss_fn(y_batch_train[:, z_dim:], y_out[:, z_dim:])
-            #latent_loss = self.loss_latent(y_short, tf.concat([y_out[:, :z_dim], y_out[:, -y_dim:]], axis=-1))  # * x_batch_train.shape[0]
-            latent_loss = self.loss_latent(z, y_out[:, :z_dim])  # * x_batch_train.shape[0]
+            latent_loss = self.loss_latent(y_short, tf.concat([y_out[:, :z_dim], y_out[:, -y_dim:]], axis=-1))  # * x_batch_train.shape[0]
+            #latent_loss = self.loss_latent(z, y_out[:, :z_dim])  # * x_batch_train.shape[0]
             forward_loss = self.w0 * rec_loss + self.w1 * reg_loss + self.w2 * latent_loss
 
         grads = tape.gradient(forward_loss, self.model.trainable_weights)
@@ -149,7 +149,7 @@ if __name__ == '__main__':
     is_only_validation_data = True
     label_epochs = 200
 
-    d_model = 2
+    d_model = 4
     dff = 128
     num_layers = 3
     num_heads = 3
@@ -160,7 +160,7 @@ if __name__ == '__main__':
         'name': 'NVP'
     }
 
-    batch_size = 128
+    batch_size = 512
     train_epochs = 100
     patience = 50
 
@@ -194,7 +194,7 @@ if __name__ == '__main__':
 
     model = TransformerAutoencoderNVP(num_layers=num_layers, d_model=d_model, num_heads=num_heads, dff=dff, input_size=x_train.shape[-1], nvp_config=nvp_config, dropout_rate=0)
 
-    loader = {'train': tf.data.Dataset.from_tensor_slices((x_train, y_train)).shuffle(1024).batch(batch_size=batch_size).repeat(),
+    loader = {'train': tf.data.Dataset.from_tensor_slices((x_train, y_train)).shuffle(1024).batch(batch_size=batch_size), #.repeat(),
               'valid': tf.data.Dataset.from_tensor_slices((x_valid, y_valid)).batch(batch_size=batch_size)}
 
     trainer = Trainer(model, rec_loss_fn, reg_loss_fn, x_dim, y_dim, z_dim)
@@ -203,7 +203,7 @@ if __name__ == '__main__':
     trainer.fit(loader['train'],
                 batch_size=batch_size,
                 epochs=train_epochs,
-                steps_per_epoch=len(datasets['train']) // batch_size,
+                #steps_per_epoch=len(datasets['train']) // batch_size,
                 callbacks=[CSVLogger(f"learning_curve.log")])
 
     #eval(model, loader['valid'], rec_loss_fn, reg_loss_fn)
