@@ -63,11 +63,11 @@ class Trainer(tf.keras.Model):
         # For rec loss weight
         self.w0 = 5.
         # For reg loss weight
-        self.w1 = 1.
+        self.w1 = 5
         # For latent loss weight
         self.w2 = 1.
         # For rev loss weight
-        self.w3 = 1.
+        self.w3 = 10.
 
         self.rec_loss_fn = rec_loss_fn
         self.reg_loss_fn = reg_loss_fn
@@ -95,30 +95,30 @@ class Trainer(tf.keras.Model):
             latent_loss = self.loss_latent(y_short, tf.concat([y_out[:, :z_dim], y_out[:, -y_dim:]], axis=-1))  # * x_batch_train.shape[0]
             forward_loss = self.w0 * rec_loss + self.w1 * reg_loss + self.w2 * latent_loss
 
-            #grads = tape.gradient(forward_loss, self.model.trainable_weights)
-            #optimizer.apply_gradients(zip(grads, self.model.trainable_weights))
+        grads = tape.gradient(forward_loss, self.model.trainable_weights)
+        optimizer.apply_gradients(zip(grads, self.model.trainable_weights))
 
-            '''
-            # Use the gradient tape to automatically retrieve
-            # the gradients of the trainable variables with respect to the loss.
-            grads = tape.gradient(forward_loss, model.trainable_weights)
-            # Run one step of gradient descent by updating
-            # the value of the variables to minimize the loss.
-            optimizer.apply_gradients(zip(grads, model.trainable_weights))
-            '''
-            # Backward loss
-            # with tf.GradientTape() as tape:
-            #self.model.decoder.trainable = False
-            #_, _, x_encoding = self.model(x_batch_train, training=True)  # Logits for this minibatch
+        '''
+        # Use the gradient tape to automatically retrieve
+        # the gradients of the trainable variables with respect to the loss.
+        grads = tape.gradient(forward_loss, model.trainable_weights)
+        # Run one step of gradient descent by updating
+        # the value of the variables to minimize the loss.
+        optimizer.apply_gradients(zip(grads, model.trainable_weights))
+        '''
+        # Backward loss
+        with tf.GradientTape() as tape:
+            self.model.decoder.trainable = False
+            _, _, x_encoding = self.model(x_batch_train, training=True)  # Logits for this minibatch
             x_rev = self.model.inverse(y_batch_train)
             rev_loss = self.loss_backward(x_rev, x_encoding)  # * x_batch_train.shape[0]
-            loss = forward_loss + self.w3 * rev_loss
+            loss =  self.w3 * rev_loss
 
         grads = tape.gradient(loss, self.model.trainable_weights)
         optimizer.apply_gradients(zip(grads, self.model.trainable_weights))
-        #self.model.decoder.trainable = True
+        self.model.decoder.trainable = True
 
-        return {'total_loss': loss,
+        return {'total_loss': forward_loss + loss,
                 'rec_loss': rec_loss,
                 'reg_loss': reg_loss,
                 'latent_loss': latent_loss,
@@ -159,8 +159,9 @@ if __name__ == '__main__':
         'name': 'NVP'
     }
 
-    batch_size = 128
-    train_epochs = 50
+    batch_size = 256
+    train_epochs = 100
+    patience = 20
 
     # 15624
     datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, hp=str(label_epochs), seed=777),
@@ -201,7 +202,9 @@ if __name__ == '__main__':
     trainer.fit(loader['train'],
                 batch_size=batch_size,
                 epochs=train_epochs,
-                callbacks=[CSVLogger(f"learning_curve.log")])
+                callbacks=[CSVLogger(f"learning_curve.log"),
+                           EarlyStopping(monitor='total_loss', patience=patience, restore_best_weights=True)]
+                )
 
     #eval(model, loader['valid'], rec_loss_fn, reg_loss_fn)
     x, y = np.array([x_valid[0]]), np.array([y_valid[0]])
@@ -209,7 +212,8 @@ if __name__ == '__main__':
     rec = tf.argmax(rec, axis=-1)
     z = np.random.multivariate_normal([1.]*z_dim, np.eye(z_dim), 1)
     y_new = np.concatenate([z, y[:, -y_dim:]], axis=-1)
-    print(x, rec)
+    print(x)
+    print(rec.numpy())
     print(y[:, -y_dim:], reg[:, -y_dim:])
     rev_x = model.inverse(y_new.astype(np.float32))
     print(MSE(rev_x, flat_encoding))
