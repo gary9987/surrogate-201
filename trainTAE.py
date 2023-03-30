@@ -10,6 +10,7 @@ import sys, os, datetime
 from datasets.nb201_dataset import NasBench201Dataset
 from datasets.utils import train_valid_test_split_dataset
 import numpy as np
+from evalTAE import inverse_from_acc
 
 
 logging.basicConfig(filename='train.log', level=logging.INFO, force=True, filemode='w')
@@ -166,26 +167,6 @@ class Trainer(tf.keras.Model):
                 'rev_loss': rev_loss}
 
 
-def inverse_from_acc(model: tf.keras.Model, num_sample_z: int, z_dim: int, to_inv_acc: float):
-    num_ops = 7
-    num_nodes = 8
-    y = np.array([to_inv_acc] * num_sample_z).reshape((num_sample_z, -1))  # (num_sample_z, 1)
-    z = np.random.multivariate_normal([1.] * z_dim, np.eye(z_dim), num_sample_z)  # (num_sample_z, z_dim)
-    y = np.concatenate([z, y], axis=-1).astype(np.float32)  # (num_sample_z, x_dim)
-
-    rev_latent = model.inverse(y)  # (num_sample_z, x_dim)
-    rev_x = model.decode(rev_latent.reshape((num_sample_z, -1, model.d_model)))  # (num_sample_z, input_size(120))
-
-    ops_vote = tf.reduce_sum(rev_x[:, :num_ops * num_nodes], axis=-1).numpy().reshape(-1)  # 7 ops 8 nodes
-    adj = tf.where(tf.reduce_mean(rev_x[:, num_ops * num_nodes:], axis=-1) >= 0.5, x=1., y=0.).numpy()  # (1, 8 * 8)
-    adj = np.reshape(adj, (int(adj.shape[-1]**(1/2)), int(adj.shape[-1]**(1/2))))
-    ops_idx = []
-    for i in range(num_nodes):
-        ops_idx.append(np.argmax(ops_vote[i * num_ops: (i + 1) * num_ops], axis=-1))
-
-    return ops_idx, adj
-
-
 if __name__ == '__main__':
     is_only_validation_data = True
     label_epochs = 200
@@ -255,7 +236,7 @@ if __name__ == '__main__':
                            EarlyStopping(monitor='val_total_loss', patience=patience, restore_best_weights=True)]
                 )
 
-    model.save('modelTAE')
+    model.save_weights('modelTAE_weights')
 
     x, y = np.array([x_valid[0]]), np.array([y_valid[0]])
     rec, reg, flat_encoding = model(x)
@@ -270,3 +251,5 @@ if __name__ == '__main__':
 
     decode_x = model.decode(tf.reshape(rev_x, (1, -1, d_model)))
     print(decode_x)
+
+    print(inverse_from_acc(model, num_sample_z=100, z_dim=z_dim, to_inv_acc=1.0))

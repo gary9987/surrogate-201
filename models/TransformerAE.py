@@ -178,13 +178,13 @@ class TransformerAutoencoder(tf.keras.Model):
         return self.encoder(inputs)
 
     def decode(self, inputs):
-        return tf.argmax(self.decoder(inputs), axis=-1)
+        return tf.cast(tf.argmax(self.decoder(inputs), axis=-1), tf.float32)
 
 
 class TransformerAutoencoderReg(TransformerAutoencoder):
     def __init__(self, *, num_layers, d_model, num_heads, dff,
                  input_size, dropout_rate=0.1):
-        super().__init__(num_layers=num_layers, d_model=d_model, num_heads=num_heads, dff=dff, input_size=input_size, dropout_rate=dropout_rate)
+        super(TransformerAutoencoderReg, self).__init__(num_layers=num_layers, d_model=d_model, num_heads=num_heads, dff=dff, input_size=input_size, dropout_rate=dropout_rate)
         self.reg_mlp = RegMLP(h_dim=dff, target_dim=1, dropout_rate=dropout_rate)
 
     def call(self, inputs):
@@ -203,7 +203,7 @@ class TransformerAutoencoderReg(TransformerAutoencoder):
 class TransformerAutoencoderNVP(TransformerAutoencoder):
     def __init__(self, *, num_layers, d_model, num_heads, dff,
                  input_size, nvp_config, dropout_rate=0.1):
-        super().__init__(num_layers=num_layers, d_model=d_model, num_heads=num_heads, dff=dff, input_size=input_size, dropout_rate=dropout_rate)
+        super(TransformerAutoencoderNVP, self).__init__(num_layers=num_layers, d_model=d_model, num_heads=num_heads, dff=dff, input_size=input_size, dropout_rate=dropout_rate)
         self.nvp = NVP(inp_dim=d_model * input_size, **nvp_config)
 
     def call(self, inputs):
