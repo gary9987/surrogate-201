@@ -3,6 +3,8 @@ import tensorflow as tf
 from datasets.query_nb201 import OPS_by_IDX_201
 from models.TransformerAE import TransformerAutoencoderNVP
 from nats_bench import create
+import matplotlib.pyplot as plt
+
 
 random_seed = 0
 np.random.seed(random_seed)
@@ -16,7 +18,7 @@ def inverse_from_acc(model: tf.keras.Model, num_sample_z: int, z_dim: int, to_in
     z = np.random.multivariate_normal([1.] * z_dim, np.eye(z_dim), num_sample_z)  # (num_sample_z, z_dim)
     y = np.concatenate([z, y], axis=-1).astype(np.float32)  # (num_sample_z, x_dim)
 
-    rev_latent = model.inverse(y)  # (num_sample_z, x_dim)
+    rev_latent = model.inverse(y)  # (num_sample_z, x_dim(input_size*d_model ))
     rev_x = model.decode(tf.reshape(rev_latent, (num_sample_z, -1, model.d_model)))  # (num_sample_z, input_size(120))
 
     ops_vote = tf.reduce_sum(rev_x[:, :num_ops * num_nodes], axis=0).numpy()  # 7 ops 8 nodes
@@ -59,23 +61,40 @@ if __name__ == '__main__':
 
     model.load_weights('modelTAE_weights')
 
-    to_inv_acc = 0.9999
 
-    ops_idx, adj = inverse_from_acc(model, num_sample_z=10000, z_dim=120 * d_model-1, to_inv_acc=to_inv_acc)
-    ops = [OPS_by_IDX_201[i] for i in ops_idx]
-    print(ops)
-    print(adj)
+    to_inv_acc = 0.95
+    x = []
+    y = []
+    while to_inv_acc >= 0.60:
+        for i in range(20):
+            ops_idx, adj = inverse_from_acc(model, num_sample_z=10000, z_dim=120 * d_model-1, to_inv_acc=to_inv_acc)
+            ops = [OPS_by_IDX_201[i] for i in ops_idx]
+            print(ops)
+            print(adj)
 
-    arch_str = ops_list_to_nb201_arch_str(ops)
-    print(arch_str)
+            arch_str = ops_list_to_nb201_arch_str(ops)
+            print(arch_str)
 
-    nb201api = create(None, 'tss', fast_mode=True, verbose=True)
-    idx = nb201api.query_index_by_arch(arch_str)
-    for seed in [777, 888]:
-        data = nb201api.get_more_info(idx, 'cifar10-valid', iepoch=199, hp='200', is_random=seed)
-        print(data['valid-accuracy'])
+            nb201api = create(None, 'tss', fast_mode=True, verbose=True)
+            idx = nb201api.query_index_by_arch(arch_str)
 
-        data = nb201api.get_more_info(idx, 'cifar10', iepoch=199, hp='200', is_random=seed)
-        print(data['test-accuracy'])
+            acc = 0
+            for seed in [777, 888]:
+                data = nb201api.get_more_info(idx, 'cifar10-valid', iepoch=199, hp='200', is_random=seed)
+                print(data['valid-accuracy'])
+                acc += data['valid-accuracy'] / 100.
 
+                data = nb201api.get_more_info(idx, 'cifar10', iepoch=199, hp='200', is_random=seed)
+                print(data['test-accuracy'])
+
+            acc /= 2
+            x.append(to_inv_acc)
+            y.append(acc)
+
+        to_inv_acc -= 0.005
+
+    plt.scatter(x, y)
+    plt.xlim(0.6, 1.)
+    plt.ylim(0.6, 1.)
+    plt.show()
 
