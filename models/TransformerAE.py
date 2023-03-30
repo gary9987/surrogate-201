@@ -158,6 +158,7 @@ class TransformerAutoencoder(tf.keras.Model):
     def __init__(self, *, num_layers, d_model, num_heads, dff,
                  input_size, dropout_rate=0.1):
         super().__init__()
+        self.d_model = d_model
         self.encoder = Encoder(num_layers=num_layers, d_model=d_model, num_heads=num_heads,
                                dff=dff, input_size=input_size, dropout_rate=dropout_rate)
 

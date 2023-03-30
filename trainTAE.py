@@ -6,9 +6,9 @@ from invertible_neural_networks.flow import MSE, MMD_multiscale
 from models.TransformerAE import TransformerAutoencoderNVP, CustomSchedule
 import tensorflow as tf
 import logging
-import sys
+import sys, os, datetime
 from datasets.nb201_dataset import NasBench201Dataset
-from datasets.utils_data import train_valid_test_split_dataset
+from datasets.utils import train_valid_test_split_dataset
 import numpy as np
 
 
@@ -70,11 +70,11 @@ class Trainer(tf.keras.Model):
         # For rec loss weight
         self.w0 = 1.
         # For reg loss weight
-        self.w1 = 5
+        self.w1 = 1
         # For latent loss weight
         self.w2 = 1.
         # For rev loss weight
-        self.w3 = 10.
+        self.w3 = 1.
 
         self.rec_loss_fn = rec_loss_fn
         self.reg_loss_fn = reg_loss_fn
@@ -99,10 +99,16 @@ class Trainer(tf.keras.Model):
             rec_logits, y_out, x_encoding = self.model(x_batch_train, training=True)  # Logits for this minibatch
 
             rec_loss = self.rec_loss_fn(x_batch_train, rec_logits)
-            reg_loss = self.reg_loss_fn(tf.gather(y_batch_train[:, z_dim:], non_nan_idx),
-                                        tf.gather(y_out[:, z_dim:], non_nan_idx))
-            latent_loss = self.loss_latent(tf.gather(y_short, non_nan_idx),
-                                           tf.gather(tf.concat([y_out[:, :z_dim], y_out[:, -y_dim:]], axis=-1), non_nan_idx))  # * x_batch_train.shape[0]
+            # To avoid nan loss when batch size is small
+            if tf.shape(non_nan_idx)[0] != 0:
+                reg_loss = self.reg_loss_fn(tf.gather(y_batch_train[:, z_dim:], non_nan_idx),
+                                            tf.gather(y_out[:, z_dim:], non_nan_idx))
+                latent_loss = self.loss_latent(tf.gather(y_short, non_nan_idx),
+                                            tf.gather(tf.concat([y_out[:, :z_dim], y_out[:, -y_dim:]], axis=-1), non_nan_idx))  # * x_batch_train.shape[0]
+            else:
+                reg_loss = 0.
+                latent_loss = 0.
+
             forward_loss = self.w0 * rec_loss + self.w1 * reg_loss + self.w2 * latent_loss
 
         grads = tape.gradient(forward_loss, self.model.trainable_weights)
@@ -116,6 +122,11 @@ class Trainer(tf.keras.Model):
         # the value of the variables to minimize the loss.
         optimizer.apply_gradients(zip(grads, model.trainable_weights))
         '''
+
+        # To avoid nan loss when batch size is small
+        if tf.shape(non_nan_idx)[0] == 0:
+            return {'total_loss': forward_loss, 'rec_loss': rec_loss, 'reg_loss': reg_loss, 'latent_loss': latent_loss, 'rev_loss': 0}
+
         # Backward loss
         with tf.GradientTape() as tape:
             self.model.decoder.trainable = False
@@ -154,23 +165,25 @@ class Trainer(tf.keras.Model):
                 'latent_loss': latent_loss,
                 'rev_loss': rev_loss}
 
-def eval(model, test_dataset, rec_loss_fn, reg_loss_fn):
-    total_rec_loss = 0
-    total_reg_loss = 0
 
-    # Iterate over the batches of the dataset.
-    for (x, y) in tqdm(test_dataset):
-        rec_logits, reg_logits = model(x, training=False)  # Logits for this minibatch
+def inverse_from_acc(model: tf.keras.Model, num_sample_z: int, z_dim: int, to_inv_acc: float):
+    num_ops = 7
+    num_nodes = 8
+    y = np.array([to_inv_acc] * num_sample_z).reshape((num_sample_z, -1))  # (num_sample_z, 1)
+    z = np.random.multivariate_normal([1.] * z_dim, np.eye(z_dim), num_sample_z)  # (num_sample_z, z_dim)
+    y = np.concatenate([z, y], axis=-1).astype(np.float32)  # (num_sample_z, x_dim)
 
-        # Compute the loss value for this minibatch.
-        rec_loss = rec_loss_fn(x, rec_logits)
-        reg_loss = reg_loss_fn(y, reg_logits)
+    rev_latent = model.inverse(y)  # (num_sample_z, x_dim)
+    rev_x = model.decode(rev_latent.reshape((num_sample_z, -1, model.d_model)))  # (num_sample_z, input_size(120))
 
-        total_rec_loss += rec_loss
-        total_reg_loss += reg_loss
+    ops_vote = tf.reduce_sum(rev_x[:, :num_ops * num_nodes], axis=-1).numpy().reshape(-1)  # 7 ops 8 nodes
+    adj = tf.where(tf.reduce_mean(rev_x[:, num_ops * num_nodes:], axis=-1) >= 0.5, x=1., y=0.).numpy()  # (1, 8 * 8)
+    adj = np.reshape(adj, (int(adj.shape[-1]**(1/2)), int(adj.shape[-1]**(1/2))))
+    ops_idx = []
+    for i in range(num_nodes):
+        ops_idx.append(np.argmax(ops_vote[i * num_ops: (i + 1) * num_ops], axis=-1))
 
-    print("Testing rec_loss: %.4f, reg_loss: %.4f" % (float(total_rec_loss / len(test_dataset)),
-                                                      float(total_reg_loss / len(test_dataset))))
+    return ops_idx, adj
 
 
 if __name__ == '__main__':
@@ -178,7 +191,8 @@ if __name__ == '__main__':
     label_epochs = 200
 
     d_model = 4
-    dff = 128
+    dropout_rate = 0.0
+    dff = 512
     num_layers = 3
     num_heads = 3
     nvp_config = {
@@ -188,8 +202,8 @@ if __name__ == '__main__':
         'name': 'NVP'
     }
 
-    batch_size = 128
-    train_epochs = 100
+    batch_size = 512
+    train_epochs = 1000
     patience = 100
 
     # 15624
@@ -220,23 +234,29 @@ if __name__ == '__main__':
     rec_loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)
     reg_loss_fn = tf.keras.losses.MeanSquaredError()
 
-    model = TransformerAutoencoderNVP(num_layers=num_layers, d_model=d_model, num_heads=num_heads, dff=dff, input_size=x_train.shape[-1], nvp_config=nvp_config, dropout_rate=0)
+    model = TransformerAutoencoderNVP(num_layers=num_layers, d_model=d_model, num_heads=num_heads, dff=dff, input_size=x_train.shape[-1], nvp_config=nvp_config, dropout_rate=dropout_rate)
 
-    loader = {'train': tf.data.Dataset.from_tensor_slices((x_train, y_train)).shuffle(1024).batch(batch_size=batch_size),
+    loader = {'train': tf.data.Dataset.from_tensor_slices((x_train, y_train)).shuffle(1024).batch(batch_size=batch_size).repeat(),
               'valid': tf.data.Dataset.from_tensor_slices((x_valid, y_valid)).batch(batch_size=batch_size)}
 
     trainer = Trainer(model, rec_loss_fn, reg_loss_fn, x_dim, y_dim, z_dim)
-    trainer.compile(optimizer=optimizer, run_eagerly=True)
+    trainer.compile(optimizer='adam', run_eagerly=True)
     print(len(datasets['train']))
+
+    logdir = os.path.join("logs", datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+    tensorboard_callback = tf.keras.callbacks.TensorBoard(logdir, histogram_freq=1)
     trainer.fit(loader['train'],
                 validation_data=loader['valid'],
                 batch_size=batch_size,
                 epochs=train_epochs,
+                steps_per_epoch=len(datasets['train']) // batch_size,
                 callbacks=[CSVLogger(f"learning_curve.log"),
-                           EarlyStopping(monitor='total_loss', patience=patience, restore_best_weights=True)]
+                           tensorboard_callback,
+                           EarlyStopping(monitor='val_total_loss', patience=patience, restore_best_weights=True)]
                 )
 
-    #eval(model, loader['valid'], rec_loss_fn, reg_loss_fn)
+    model.save('modelTAE')
+
     x, y = np.array([x_valid[0]]), np.array([y_valid[0]])
     rec, reg, flat_encoding = model(x)
     rec = tf.argmax(rec, axis=-1)
