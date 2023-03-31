@@ -10,10 +10,13 @@ import sys, os, datetime
 from datasets.nb201_dataset import NasBench201Dataset
 from datasets.utils import train_valid_test_split_dataset
 import numpy as np
-from evalTAE import inverse_from_acc
+from evalTAE import inverse_from_acc, ops_list_to_nb201_arch_str
+from datasets.query_nb201 import OPS_by_IDX_201
+from datasets.bananas_path_encoding_nb201 import Cell
 
 
-logging.basicConfig(filename='train.log', level=logging.INFO, force=True, filemode='w')
+now_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+logging.basicConfig(filename=f'train_{now_time}.log', level=logging.INFO, force=True, filemode='w')
 logger = logging.getLogger(__name__)
 handler = logging.StreamHandler(sys.stdout)
 handler.setLevel(logging.INFO)
@@ -48,6 +51,37 @@ def to_NVP_data(graph_dataset, z_dim, reg_size):
         features.append(np.concatenate([x, a]))
 
         #z = np.reshape(np.random.multivariate_normal([0.]*z_dim, np.eye(z_dim), 1), -1)
+        y = np.array([data.y[-1] / 100.0])
+        y_list.append(y)
+
+    y_list = np.array(y_list)
+    z = np.random.multivariate_normal([0.] * z_dim, np.eye(z_dim), y_list.shape[0])
+    y_list = np.concatenate([z, y_list], axis=-1)
+    y_list[to_nan_idx, :] = np.nan
+
+    return np.array(features).astype(np.float32), np.array(y_list).astype(np.float32)
+
+
+def to_NVP_data_path_encode(graph_dataset, z_dim, reg_size):
+    features = []
+    y_list = []
+    if reg_size == -1:
+        nan_size = 0
+    else:
+        nan_size = len(graph_dataset) - reg_size
+
+    to_nan_idx = np.random.choice(range(len(graph_dataset)), nan_size, replace=False)
+
+    ops_idx = []
+    for data in graph_dataset:
+        x = np.reshape(data.x, -1)
+        for i in range(8):
+            ops_idx.append(OPS_by_IDX_201[np.argmax(x[i * 7: (i + 1) * 7], axis=-1)])
+
+        arch_str = ops_list_to_nb201_arch_str(ops_idx)
+        encode_x = Cell(arch_str).encode_paths()
+        features.append(encode_x)
+
         y = np.array([data.y[-1] / 100.0])
         y_list.append(y)
 
@@ -203,6 +237,7 @@ if __name__ == '__main__':
             datasets[key].apply(ReshapeYTransform())
 
     x_dim = (np.reshape(datasets['train'][0].x, -1).shape[-1] + np.reshape(datasets['train'][0].a, -1).shape[-1]) * d_model  # 120 * 4
+    #x_dim = 155 * d_model
     y_dim = 1  # 1
     z_dim = x_dim - y_dim  # 479
 
@@ -221,22 +256,22 @@ if __name__ == '__main__':
               'valid': tf.data.Dataset.from_tensor_slices((x_valid, y_valid)).batch(batch_size=batch_size)}
 
     trainer = Trainer(model, rec_loss_fn, reg_loss_fn, x_dim, y_dim, z_dim)
-    trainer.compile(optimizer='adam', run_eagerly=True)
+    trainer.compile(optimizer=optimizer, run_eagerly=True)
     print(len(datasets['train']))
 
-    logdir = os.path.join("logs", datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+    logdir = os.path.join("logs", now_time)
     tensorboard_callback = tf.keras.callbacks.TensorBoard(logdir, histogram_freq=1)
     trainer.fit(loader['train'],
                 validation_data=loader['valid'],
                 batch_size=batch_size,
                 epochs=train_epochs,
                 steps_per_epoch=len(datasets['train']) // batch_size,
-                callbacks=[CSVLogger(f"learning_curve.log"),
+                callbacks=[CSVLogger(f"learning_curve_{now_time}.log"),
                            tensorboard_callback,
                            EarlyStopping(monitor='val_total_loss', patience=patience, restore_best_weights=True)]
                 )
 
-    model.save_weights('modelTAE_weights')
+    model.save_weights(f'modelTAE_weights_{now_time}')
 
     x, y = np.array([x_valid[0]]), np.array([y_valid[0]])
     rec, reg, flat_encoding = model(x)
