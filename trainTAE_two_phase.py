@@ -17,7 +17,9 @@ from datasets.bananas_path_encoding_nb201 import Cell
 
 
 now_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-logging.basicConfig(filename=f'train_{now_time}.log', level=logging.INFO, force=True, filemode='w')
+logdir = os.path.join("logs", now_time)
+os.makedirs(logdir, exist_ok=True)
+logging.basicConfig(filename=os.path.join(logdir, f'train.log'), level=logging.INFO, force=True, filemode='w')
 logger = logging.getLogger(__name__)
 handler = logging.StreamHandler(sys.stdout)
 handler.setLevel(logging.INFO)
@@ -34,6 +36,7 @@ args = parser.parse_args()
 
 random_seed = 0
 tf.random.set_seed(random_seed)
+
 
 class Trainer1(tf.keras.Model):
     def __init__(self, model: TransformerAutoencoderNVP, rec_loss_fn):
@@ -59,7 +62,7 @@ class Trainer1(tf.keras.Model):
             rec_loss = self.rec_loss_fn(x_batch_train, rec_logits)
 
         grads = tape.gradient(rec_loss, self.model.trainable_weights)
-        optimizer.apply_gradients(zip(grads, self.model.trainable_weights))
+        self.optimizer.apply_gradients(zip(grads, self.model.trainable_weights))
 
         self.model.nvp.trainable = True
 
@@ -82,7 +85,7 @@ class Trainer2(tf.keras.Model):
         self.z_dim = z_dim
 
         # For reg loss weight
-        self.w1 = 5
+        self.w1 = 1
         # For latent loss weight
         self.w2 = 1.
         # For rev loss weight
@@ -125,7 +128,7 @@ class Trainer2(tf.keras.Model):
             forward_loss = self.w1 * reg_loss + self.w2 * latent_loss
 
         grads = tape.gradient(forward_loss, self.model.trainable_weights)
-        optimizer.apply_gradients(zip(grads, self.model.trainable_weights))
+        self.optimizer.apply_gradients(zip(grads, self.model.trainable_weights))
 
         '''
         # Use the gradient tape to automatically retrieve
@@ -148,7 +151,7 @@ class Trainer2(tf.keras.Model):
             loss = self.w3 * rev_loss
 
         grads = tape.gradient(loss, self.model.trainable_weights)
-        optimizer.apply_gradients(zip(grads, self.model.trainable_weights))
+        self.optimizer.apply_gradients(zip(grads, self.model.trainable_weights))
 
         self.model.encoder.trainable = True
         self.model.decoder.trainable = True
@@ -177,10 +180,30 @@ class Trainer2(tf.keras.Model):
                 'rev_loss': rev_loss}
 
 
+def train(phase: int, model, loader, batch_size, train_epochs, steps_per_epoch, callbacks=None, reg_loss_fn=None, rec_loss_fn=None, x_dim=None, y_dim=None, z_dim=None):
+    optimizer = tf.keras.optimizers.Adam(CustomSchedule(d_model), beta_1=0.9, beta_2=0.98, epsilon=1e-9)
+    if phase == 1:
+        trainer = Trainer1(model, rec_loss_fn)
+    elif phase == 2:
+        trainer = Trainer2(model, reg_loss_fn, x_dim, y_dim, z_dim)
+
+    trainer.compile(optimizer=optimizer, run_eagerly=True)
+    trainer.fit(loader['train'],
+                validation_data=loader['valid'],
+                batch_size=batch_size,
+                epochs=train_epochs,
+                steps_per_epoch=steps_per_epoch,
+                callbacks=callbacks
+                )
+    model.save_weights(os.path.join(logdir, f'modelTAE_weights_phase{phase}'))
+
+
 if __name__ == '__main__':
     is_only_validation_data = True
     label_epochs = 200
 
+    train_phase = [0, 1]  # 0 not train, 1 train
+    pretrained_phase1_weight = 'modelTAE_AE_weights_20230331-170246'
     d_model = 4
     dropout_rate = 0.0
     dff = 512
@@ -220,8 +243,7 @@ if __name__ == '__main__':
     x_train, y_train = to_NVP_data(datasets['train'], z_dim, args.train_sample_amount)
     x_valid, y_valid = to_NVP_data(datasets['valid'], z_dim, -1)
 
-    learning_rate = CustomSchedule(d_model)
-    optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9)
+
     #tf.keras.losses.Reduction.SUM
     rec_loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)
     reg_loss_fn = tf.keras.losses.MeanSquaredError()
@@ -231,39 +253,29 @@ if __name__ == '__main__':
     loader = {'train': tf.data.Dataset.from_tensor_slices((x_train, y_train)).shuffle(1024).batch(batch_size=batch_size).repeat(),
               'valid': tf.data.Dataset.from_tensor_slices((x_valid, y_valid)).batch(batch_size=batch_size)}
 
-    trainer = Trainer1(model, rec_loss_fn)
-    trainer.compile(optimizer=optimizer, run_eagerly=True)
-    print(len(datasets['train']))
 
-    logdir = os.path.join("logs", now_time)
     tensorboard_callback = tf.keras.callbacks.TensorBoard(logdir, histogram_freq=1)
-    trainer.fit(loader['train'],
-                validation_data=loader['valid'],
-                batch_size=batch_size,
-                epochs=train_epochs,
-                steps_per_epoch=len(datasets['train']) // batch_size,
-                callbacks=[CSVLogger(f"learning_curve_{now_time}.log"),
-                           tensorboard_callback,
-                           EarlyStopping(monitor='val_rec_loss', patience=20, restore_best_weights=True)]
-                )
-    model.save_weights(f'modelTAE_AE_weights_{now_time}')
+    steps_per_epoch = len(datasets['train']) // batch_size
 
-    learning_rate = CustomSchedule(d_model)
-    optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9)
-    trainer = Trainer2(model, reg_loss_fn, x_dim, y_dim, z_dim)
-    trainer.compile(optimizer=optimizer, run_eagerly=True)
+    if train_phase[0]:
+        callbacks = [CSVLogger(os.path.join(logdir, "learning_curve_phase1.log")),
+                     tensorboard_callback,
+                     EarlyStopping(monitor='val_rec_loss', patience=20, restore_best_weights=True)]
+        train(1, model, loader, batch_size, train_epochs, steps_per_epoch, callbacks, rec_loss_fn=rec_loss_fn)
+    else:
+        model.load_weights(pretrained_phase1_weight)
 
-    trainer.fit(loader['train'],
-                validation_data=loader['valid'],
-                batch_size=batch_size,
-                epochs=train_epochs,
-                steps_per_epoch=len(datasets['train']) // batch_size,
-                callbacks=[CSVLogger(f"learning_curve_{now_time}.log"),
-                           tensorboard_callback,
-                           EarlyStopping(monitor='val_total_loss', patience=patience, restore_best_weights=True)]
-                )
-    model.save_weights(f'modelTAE_weights_{now_time}')
+    if train_phase[1]:
+        print('Train phase 2')
+        callbacks = [CSVLogger(os.path.join(logdir, f"learning_curve_phase2.log")),
+                     tensorboard_callback,
+                     EarlyStopping(monitor='val_total_loss', patience=patience, restore_best_weights=True)]
+        train(2, model, loader, batch_size, train_epochs, steps_per_epoch, callbacks, reg_loss_fn=reg_loss_fn,
+              x_dim=x_dim, y_dim=y_dim, z_dim=z_dim)
+    else:
+        model.load_weights(pretrained_phase1_weight)
 
+    # For testing inverse
     x, y = np.array([x_valid[0]]), np.array([y_valid[0]])
     rec, reg, flat_encoding = model(x)
     rec = tf.argmax(rec, axis=-1)
