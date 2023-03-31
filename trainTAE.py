@@ -8,15 +8,15 @@ import tensorflow as tf
 import logging
 import sys, os, datetime
 from datasets.nb201_dataset import NasBench201Dataset
-from datasets.utils import train_valid_test_split_dataset
+from datasets.utils import train_valid_test_split_dataset, to_NVP_data
 import numpy as np
-from evalTAE import inverse_from_acc, ops_list_to_nb201_arch_str
-from datasets.query_nb201 import OPS_by_IDX_201
-from datasets.bananas_path_encoding_nb201 import Cell
+from evalTAE import inverse_from_acc
 
 
 now_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-logging.basicConfig(filename=f'train_{now_time}.log', level=logging.INFO, force=True, filemode='w')
+logdir = os.path.join("logs", now_time)
+os.makedirs(logdir, exist_ok=True)
+logging.basicConfig(filename=os.path.join(logdir, f'train.log'), level=logging.INFO, force=True, filemode='w')
 logger = logging.getLogger(__name__)
 handler = logging.StreamHandler(sys.stdout)
 handler.setLevel(logging.INFO)
@@ -33,64 +33,6 @@ args = parser.parse_args()
 
 random_seed = 0
 tf.random.set_seed(random_seed)
-
-
-def to_NVP_data(graph_dataset, z_dim, reg_size):
-    features = []
-    y_list = []
-    if reg_size == -1:
-        nan_size = 0
-    else:
-        nan_size = len(graph_dataset) - reg_size
-
-    to_nan_idx = np.random.choice(range(len(graph_dataset)), nan_size, replace=False)
-
-    for data in graph_dataset:
-        x = np.reshape(data.x, -1)
-        a = np.reshape(data.a, -1)
-        features.append(np.concatenate([x, a]))
-
-        #z = np.reshape(np.random.multivariate_normal([0.]*z_dim, np.eye(z_dim), 1), -1)
-        y = np.array([data.y[-1] / 100.0])
-        y_list.append(y)
-
-    y_list = np.array(y_list)
-    z = np.random.multivariate_normal([0.] * z_dim, np.eye(z_dim), y_list.shape[0])
-    y_list = np.concatenate([z, y_list], axis=-1)
-    y_list[to_nan_idx, :] = np.nan
-
-    return np.array(features).astype(np.float32), np.array(y_list).astype(np.float32)
-
-
-def to_NVP_data_path_encode(graph_dataset, z_dim, reg_size):
-    features = []
-    y_list = []
-    if reg_size == -1:
-        nan_size = 0
-    else:
-        nan_size = len(graph_dataset) - reg_size
-
-    to_nan_idx = np.random.choice(range(len(graph_dataset)), nan_size, replace=False)
-
-    ops_idx = []
-    for data in graph_dataset:
-        x = np.reshape(data.x, -1)
-        for i in range(8):
-            ops_idx.append(OPS_by_IDX_201[np.argmax(x[i * 7: (i + 1) * 7], axis=-1)])
-
-        arch_str = ops_list_to_nb201_arch_str(ops_idx)
-        encode_x = Cell(arch_str).encode_paths()
-        features.append(encode_x)
-
-        y = np.array([data.y[-1] / 100.0])
-        y_list.append(y)
-
-    y_list = np.array(y_list)
-    z = np.random.multivariate_normal([0.] * z_dim, np.eye(z_dim), y_list.shape[0])
-    y_list = np.concatenate([z, y_list], axis=-1)
-    y_list[to_nan_idx, :] = np.nan
-
-    return np.array(features).astype(np.float32), np.array(y_list).astype(np.float32)
 
 
 class Trainer(tf.keras.Model):
@@ -266,12 +208,12 @@ if __name__ == '__main__':
                 batch_size=batch_size,
                 epochs=train_epochs,
                 steps_per_epoch=len(datasets['train']) // batch_size,
-                callbacks=[CSVLogger(f"learning_curve_{now_time}.log"),
+                callbacks=[CSVLogger(os.path.join(logdir, "learning_curve_phase1.log")),
                            tensorboard_callback,
                            EarlyStopping(monitor='val_total_loss', patience=patience, restore_best_weights=True)]
                 )
 
-    model.save_weights(f'modelTAE_weights_{now_time}')
+    model.save_weights(os.path.join(logdir, 'modelTAE_weights'))
 
     x, y = np.array([x_valid[0]]), np.array([y_valid[0]])
     rec, reg, flat_encoding = model(x)
