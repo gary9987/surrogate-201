@@ -153,14 +153,14 @@ if __name__ == '__main__':
     num_layers = 3
     num_heads = 3
     nvp_config = {
-        'n_couple_layer': 3,
-        'n_hid_layer': 3,
+        'n_couple_layer': 4,
+        'n_hid_layer': 4,
         'n_hid_dim': 128,
         'name': 'NVP'
     }
 
     batch_size = 512
-    train_epochs = 1000
+    train_epochs = 300
     patience = 100
 
     # 15624
@@ -183,7 +183,7 @@ if __name__ == '__main__':
     y_dim = 1  # 1
     z_dim = x_dim - y_dim  # 479
 
-    x_train, y_train = to_NVP_data(datasets['train'], z_dim, args.train_sample_amount)
+    x_train, y_train = to_NVP_data(datasets['train'], z_dim, -1)
     x_valid, y_valid = to_NVP_data(datasets['valid'], z_dim, -1)
 
     learning_rate = CustomSchedule(d_model)
@@ -208,9 +208,10 @@ if __name__ == '__main__':
                 batch_size=batch_size,
                 epochs=train_epochs,
                 steps_per_epoch=len(datasets['train']) // batch_size,
-                callbacks=[CSVLogger(os.path.join(logdir, "learning_curve_phase1.log")),
+                callbacks=[CSVLogger(os.path.join(logdir, "learning_curve.log")),
                            tensorboard_callback,
-                           EarlyStopping(monitor='val_total_loss', patience=patience, restore_best_weights=True)]
+                           #EarlyStopping(monitor='val_total_loss', patience=patience, restore_best_weights=True)
+                           ]
                 )
 
     model.save_weights(os.path.join(logdir, 'modelTAE_weights'))

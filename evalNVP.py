@@ -5,6 +5,7 @@ from datasets.nb201_dataset import NasBench201Dataset
 from datasets.query_nb201 import OPS_by_IDX_201
 from datasets.transformation import OnlyValidAccTransform, ReshapeYTransform
 from datasets.utils import train_valid_test_split_dataset, ops_list_to_nb201_arch_str, to_NVP_data
+from invertible_neural_networks.flow import NVP
 from models.TransformerAE import TransformerAutoencoderNVP
 from nats_bench import create
 import matplotlib.pyplot as plt
@@ -36,11 +37,7 @@ def inverse_from_acc(model: tf.keras.Model, num_sample_z: int, z_dim: int, to_in
 
 
 if __name__ == '__main__':
-    d_model = 4
-    dropout_rate = 0.0
-    dff = 512
-    num_layers = 3
-    num_heads = 3
+
     input_size = 120
     nvp_config = {
         'n_couple_layer': 4,
@@ -48,10 +45,9 @@ if __name__ == '__main__':
         'n_hid_dim': 128,
         'name': 'NVP'
     }
-    model = TransformerAutoencoderNVP(num_layers=num_layers, d_model=d_model, num_heads=num_heads, dff=dff,
-                                      input_size=input_size, nvp_config=nvp_config)
+    model = NVP(inp_dim=input_size, **nvp_config)
 
-    model.load_weights('logs/20230401-184209/modelTAE_weights')
+    model.load_weights('logs/20230402-002701/modelNVP_weights')
     datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, hp=str(200), seed=777),
                                               ratio=[0.9, 0.1],
                                               shuffle=True,
@@ -60,7 +56,7 @@ if __name__ == '__main__':
     for key in datasets:
         datasets[key].apply(OnlyValidAccTransform())
 
-    x_valid, y_valid = to_NVP_data(datasets['train'][:500], 479, -1)
+    x_valid, y_valid = to_NVP_data(datasets['train'][:500], 119, -1)
 
     diff = 0
     for x, y in zip(x_valid, y_valid):
@@ -69,34 +65,30 @@ if __name__ == '__main__':
             ops_idx.append(np.argmax(x[i * 7: (i + 1) * 7], axis=-1))
         print(ops_idx)
 
-        rec, reg, enc = model(np.array([x]))
+        reg = model(np.array([x]))
         a = model.inverse(reg)
-        de = model.decode(tf.reshape(a, (1, -1, model.d_model))).numpy().reshape(-1)
+        a = tf.where(a >= 0.5, x=1., y=0.).numpy().reshape(-1)
         ops_idx = []
         for i in range(8):
-            ops_idx.append(np.argmax(de[i * 7: (i + 1) * 7], axis=-1))
+            ops_idx.append(np.argmax(a[i * 7: (i + 1) * 7], axis=-1))
         print(ops_idx)
 
         a = model.inverse(y)
-        de = model.decode(tf.reshape(a, (1, -1, model.d_model))).numpy().reshape(-1)
+        a = tf.where(a >= 0.5, x=1., y=0.).numpy().reshape(-1)
         ops_idx = []
         for i in range(8):
-            ops_idx.append(np.argmax(de[i * 7: (i + 1) * 7], axis=-1))
+            ops_idx.append(np.argmax(a[i * 7: (i + 1) * 7], axis=-1))
         print(ops_idx)
 
-
-        ops_idx = []
-        for i in range(8):
-            ops_idx.append(np.argmax(de[i * 7: (i + 1) * 7], axis=-1))
-        print(ops_idx)
-
-        z = np.random.multivariate_normal([1.] * 479, np.eye(479), 1).reshape(-1).astype(np.float32)
-        y = np.array([y[-1]]).astype(np.float32)
+        num_s = 1000
+        z = np.random.multivariate_normal([1.] * 119, np.eye(119), num_s).astype(np.float32)
+        y = np.array([[y[-1]] * num_s]).reshape(-1, 1).astype(np.float32)
         a = model.inverse(np.concatenate([z, y], axis=-1))
-        de = model.decode(tf.reshape(a, (1, -1, model.d_model))).numpy().reshape(-1)
+        a = tf.reduce_mean(a, axis=0)
+        a = tf.where(a >= 0.5, x=1., y=0.).numpy().reshape(-1)
         ops_idx = []
         for i in range(8):
-            ops_idx.append(np.argmax(de[i * 7: (i + 1) * 7], axis=-1))
+            ops_idx.append(np.argmax(a[i * 7: (i + 1) * 7], axis=-1))
         print(ops_idx)
 
     print(diff)
