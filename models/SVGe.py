@@ -669,3 +669,190 @@ class SVGE_acc(nn.Module):
 
     def number_of_parameters(self):
         return (sum(p.numel() for p in self.parameters() if p.requires_grad))
+
+
+
+
+
+from FrEIA.framework import InputNode, OutputNode, Node, ReversibleGraphNet
+from FrEIA.modules import GLOWCouplingBlock, PermuteRandom
+
+
+def get_MMD_multiscale(device):
+    def MMD_multiscale(x, y):
+        xx, yy, zz = torch.mm(x,x.t()), torch.mm(y,y.t()), torch.mm(x,y.t())
+
+        rx = (xx.diag().unsqueeze(0).expand_as(xx))
+        ry = (yy.diag().unsqueeze(0).expand_as(yy))
+
+        dxx = rx.t() + rx - 2.*xx
+        dyy = ry.t() + ry - 2.*yy
+        dxy = rx.t() + ry - 2.*zz
+
+        XX, YY, XY = (torch.zeros(xx.shape).to(device),
+                      torch.zeros(xx.shape).to(device),
+                      torch.zeros(xx.shape).to(device))
+
+        for a in [0.05, 0.2, 0.9]:
+            XX += a**2 * (a**2 + dxx)**-1
+            YY += a**2 * (a**2 + dyy)**-1
+            XY += a**2 * (a**2 + dxy)**-1
+
+        return torch.mean(XX + YY - 2.*XY)
+
+    return MMD_multiscale
+
+
+def fit(input, target):
+    return torch.mean((input - target)**2)
+
+
+# Accuracy Prediction
+class NVP(nn.Module):
+    def __init__(self, model_config, dim_y):
+        super(NVP, self).__init__()
+        self.device = 'cuda'
+        self.dim_x = model_config['graph_embedding_dim']
+        self.dim_y = dim_y
+        self.dim_z = self.dim_x - self.dim_y
+        self.loss_latent = get_MMD_multiscale(self.device)
+        self.loss_fit = fit
+        self.noise_scale = 0.001
+
+        def subnet_fc(c_in, c_out):
+            return nn.Sequential(nn.Linear(c_in, 512), nn.ReLU(),
+                                 nn.Linear(512, c_out))
+
+        self.nodes = [InputNode(self.dim_x, name='input')]
+
+        for k in range(8):
+            self.nodes.append(Node(self.nodes[-1],
+                              GLOWCouplingBlock,
+                              {'subnet_constructor': subnet_fc, 'clamp': 2.0},
+                              name=F'coupling_{k}'))
+            self.nodes.append(Node(self.nodes[-1],
+                              PermuteRandom,
+                              {'seed': k},
+                              name=F'permute_{k}'))
+
+        self.nodes.append(OutputNode(self.nodes[-1], name='output'))
+        self.model = ReversibleGraphNet(self.nodes, verbose=False)
+
+    def forward(self, x, rev=False):
+        return self.model(x, rev=rev)
+
+    def forward_loss(self, x, y):
+        y = torch.cat((torch.randn(x.size(0), self.dim_z, device=self.device), y), dim=1)
+        # Forward step:
+        output = self.model(x)[0]
+        print('nvp output ', output.shape)
+        l = torch.mean(self.loss_fit(output[:, self.dim_z:], y[:, self.dim_z:]))
+        print(l.shape)
+        l += torch.mean(self.loss_latent(output, y))
+        print(l.shape)
+        return l
+
+    def backward_loss(self, x, y):
+        # Backward step:
+        y = y + self.noise_scale * torch.randn(x.size(0), self.dim_y, device=self.device)
+
+        output = self.model(x)[0]
+
+        orig_z_perturbed = (output.data[:, :self.dim_z] + self.noise_scale * torch.randn(x.size(0), self.dim_z, device=self.device))
+        y_rev = torch.cat((orig_z_perturbed, y), dim=1)
+        y_rev_rand = torch.cat((torch.randn(x.size(0), self.dim_z, device=self.device), y), dim=1)
+
+        output_rev = self.model(y_rev, rev=True)
+        output_rev_rand = self.model(y_rev_rand, rev=True)
+
+        l_rev = (self.loss_latent(output_rev_rand, x))
+
+        l_rev += self.loss_fit(output_rev, x)
+
+        return l_rev
+
+
+class SVGE_nvp(nn.Module):
+    def __init__(self, model_config, data_config, START_TYPE=1, END_TYPE=0, dim_target=1):
+        super().__init__()
+        self.ndim = model_config['node_embedding_dim']
+        self.gdim = model_config['graph_embedding_dim']
+        self.num_gnn_layers = model_config['gnn_iteration_layers']
+        self.num_node_atts = data_config['num_node_atts']
+        self.beta = model_config['beta']
+        self.model_config = model_config
+        self.max_n = data_config['max_num_nodes']
+        self.dim_target = dim_target
+
+        self.Encoder = GNNEncoder(model_config['node_embedding_dim'], model_config['graph_embedding_dim'],
+                                  model_config['gnn_iteration_layers'],
+                                  data_config['num_node_atts'], model_config)
+        self.Decoder = GNNDecoder(model_config['node_embedding_dim'], model_config['graph_embedding_dim'],
+                                  model_config['gnn_iteration_layers'], data_config['num_node_atts']
+                                  , data_config['max_num_nodes'], model_config)
+        self.Accuracy = NVP(model_config, dim_target)
+
+        self.START_TYPE = START_TYPE
+        self.END_TYPE = END_TYPE
+
+    def sample(self, mean, log_var, eps_scale=0.01):
+        if self.training:
+            std = log_var.mul(0.5).exp_()
+            eps = torch.randn_like(std) * eps_scale
+            return eps.mul(std).add_(mean)
+        else:
+            return mean
+
+    def forward(self, batch_list):
+        h_G_mean, h_G_var = self.Encoder(batch_list[0].edge_index,
+                                         batch_list[0].node_atts,
+                                         batch_list[0].batch)
+        label_acc = torch.reshape(batch_list[0].valid_acc, (h_G_mean.size(0), -1))[:, -1:]
+        f_loss = self.Accuracy.forward_loss(h_G_mean, label_acc)
+        c = self.sample(h_G_mean, h_G_var)
+        kl_loss = -0.5 * torch.sum(1 + h_G_var - h_G_mean.pow(2) - h_G_var.exp())
+        recon_loss = self.Decoder(batch_list[1:], c, batch_list[0].nodes)
+
+        return recon_loss + self.beta * kl_loss, recon_loss, kl_loss, f_loss, h_G_mean
+
+    def backward(self, batch_list):
+        h_G_mean, h_G_var = self.Encoder(batch_list[0].edge_index,
+                                         batch_list[0].node_atts,
+                                         batch_list[0].batch)
+        label_acc = torch.reshape(batch_list[0].valid_acc, (h_G_mean.size(0), -1))[:, -1:]
+        l = self.Accuracy.backward_loss(h_G_mean, label_acc)
+        return l
+
+    def inference(self, data, sample=False, log_var=None, only_acc=False, only_embedding=False):
+        if isinstance(data, torch.Tensor):
+            if data.size(-1) != self.gdim:
+                raise Exception('Size of input is {}, must be {}'.format(data.size(0), self.ndim * 2))
+            if data.dim() == 1:
+                mean = data.unsqueeze(0)
+            else:
+                mean = data
+        elif isinstance(data, Data):
+            if not data.__contains__('batch'):
+                data.batch = torch.LongTensor([0]).to(data.edge_index.device)
+            mean, log_var = self.Encoder(data.edge_index, data.node_atts, data.batch)
+
+        if only_embedding:
+            return mean
+
+        acc = self.Accuracy(mean)
+
+        if sample:
+            c = self.sample(mean, log_var)
+        else:
+            c = mean
+            log_var = 0
+
+        if only_acc:
+            return acc
+
+        edges, node_atts, edge_list = self.Decoder.inference(c)
+
+        return edges, node_atts, edge_list, mean, log_var, c, acc, mean
+
+    def number_of_parameters(self):
+        return (sum(p.numel() for p in self.parameters() if p.requires_grad))

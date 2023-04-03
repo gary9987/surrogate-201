@@ -60,8 +60,10 @@ class Trainer(tf.keras.Model):
 
     def train_step(self, data):
         x_batch_train, y_batch_train = data
-        y = y_batch_train[:, -y_dim:]
-        z = y_batch_train[:, :z_dim]
+        y_clean = y_batch_train[:, -y_dim:]
+        y = tf.identity(y_clean) + 0.0001 * tf.random.normal(shape=y_clean.shape)
+
+        z = tf.random.normal(shape=(y.shape[0], self.z_dim))
         y_short = tf.concat([z, y], axis=-1)
         non_nan_idx = tf.reshape(tf.where(~tf.math.is_nan(tf.reduce_sum(y_batch_train, axis=-1))), -1)
 
@@ -87,34 +89,36 @@ class Trainer(tf.keras.Model):
                 latent_loss = 0.
 
             forward_loss = self.w0 * rec_loss + self.w1 * reg_loss + self.w2 * latent_loss
+            '''
+            grads = tape.gradient(forward_loss, self.model.trainable_weights)
+            optimizer.apply_gradients(zip(grads, self.model.trainable_weights))
+    
+            # Use the gradient tape to automatically retrieve
+            # the gradients of the trainable variables with respect to the loss.
+            grads = tape.gradient(forward_loss, model.trainable_weights)
+            # Run one step of gradient descent by updating
+            # the value of the variables to minimize the loss.
+            optimizer.apply_gradients(zip(grads, model.trainable_weights))
+            '''
 
-        grads = tape.gradient(forward_loss, self.model.trainable_weights)
-        optimizer.apply_gradients(zip(grads, self.model.trainable_weights))
+            # To avoid nan loss when batch size is small
+            if tf.shape(non_nan_idx)[0] == 0:
+                return {'total_loss': forward_loss, 'rec_loss': rec_loss, 'reg_loss': reg_loss, 'latent_loss': latent_loss, 'rev_loss': 0}
 
-        '''
-        # Use the gradient tape to automatically retrieve
-        # the gradients of the trainable variables with respect to the loss.
-        grads = tape.gradient(forward_loss, model.trainable_weights)
-        # Run one step of gradient descent by updating
-        # the value of the variables to minimize the loss.
-        optimizer.apply_gradients(zip(grads, model.trainable_weights))
-        '''
+            # Backward loss
+            #with tf.GradientTape() as tape:
+            #self.model.decoder.trainable = False
+            y = y_clean + 0.0001 * tf.random.normal(shape=y_clean.shape)
+            rand_y = tf.concat([tf.random.normal(shape=(y.shape[0], self.z_dim)), y], axis=-1)
 
-        # To avoid nan loss when batch size is small
-        if tf.shape(non_nan_idx)[0] == 0:
-            return {'total_loss': forward_loss, 'rec_loss': rec_loss, 'reg_loss': reg_loss, 'latent_loss': latent_loss, 'rev_loss': 0}
-
-        # Backward loss
-        with tf.GradientTape() as tape:
-            self.model.decoder.trainable = False
-            _, _, x_encoding = self.model(x_batch_train, training=True)  # Logits for this minibatch
-            x_rev = self.model.inverse(tf.gather(y_batch_train, non_nan_idx))
+            x_rev = self.model.inverse(tf.gather(rand_y, non_nan_idx))
             rev_loss = self.loss_backward(x_rev, tf.gather(x_encoding, non_nan_idx))  # * x_batch_train.shape[0]
             loss = self.w3 * rev_loss
+            t_loss = forward_loss + loss
 
-        grads = tape.gradient(loss, self.model.trainable_weights)
+        grads = tape.gradient(t_loss, self.model.trainable_weights)
         optimizer.apply_gradients(zip(grads, self.model.trainable_weights))
-        self.model.decoder.trainable = True
+        #self.model.decoder.trainable = True
 
         return {'total_loss': forward_loss + loss,
                 'rec_loss': rec_loss,
@@ -125,7 +129,7 @@ class Trainer(tf.keras.Model):
     def test_step(self, data):
         x_batch_train, y_batch_train = data
         y = y_batch_train[:, -y_dim:]
-        z = y_batch_train[:, :z_dim]
+        z = tf.random.normal(shape=(y.shape[0], self.z_dim))
         y_short = tf.concat([z, y], axis=-1)
 
         rec_logits, y_out, x_encoding = self.model(x_batch_train, training=False)  # Logits for this minibatch
@@ -133,7 +137,7 @@ class Trainer(tf.keras.Model):
         rec_loss = self.rec_loss_fn(x_batch_train, rec_logits)
         reg_loss = self.reg_loss_fn(y_batch_train[:, z_dim:], y_out[:, z_dim:])
         latent_loss = self.loss_latent(y_short, tf.concat([y_out[:, :z_dim], y_out[:, -y_dim:]], axis=-1))  # * x_batch_train.shape[0]
-        x_rev = self.model.inverse(y_batch_train)
+        x_rev = self.model.inverse(y_short)
         rev_loss = self.loss_backward(x_rev, x_encoding)  # * x_batch_train.shape[0]
 
         return {'total_loss': self.w0 * rec_loss + self.w1 * reg_loss + self.w2 * latent_loss + self.w3 * rev_loss,
@@ -153,15 +157,15 @@ if __name__ == '__main__':
     num_layers = 3
     num_heads = 3
     nvp_config = {
-        'n_couple_layer': 4,
-        'n_hid_layer': 4,
-        'n_hid_dim': 128,
+        'n_couple_layer': 3,
+        'n_hid_layer': 3,
+        'n_hid_dim': 512,
         'name': 'NVP'
     }
 
     batch_size = 512
-    train_epochs = 300
-    patience = 100
+    train_epochs = 1000
+    patience = 50
 
     # 15624
     datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, hp=str(label_epochs), seed=777),
@@ -210,7 +214,7 @@ if __name__ == '__main__':
                 steps_per_epoch=len(datasets['train']) // batch_size,
                 callbacks=[CSVLogger(os.path.join(logdir, "learning_curve.log")),
                            tensorboard_callback,
-                           #EarlyStopping(monitor='val_total_loss', patience=patience, restore_best_weights=True)
+                           EarlyStopping(monitor='val_total_loss', patience=patience, restore_best_weights=True)
                            ]
                 )
 

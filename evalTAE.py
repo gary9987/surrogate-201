@@ -9,6 +9,8 @@ from models.TransformerAE import TransformerAutoencoderNVP
 from nats_bench import create
 import matplotlib.pyplot as plt
 
+import matplotlib as mpl
+mpl.rcParams['figure.dpi'] = 300
 
 random_seed = 0
 np.random.seed(random_seed)
@@ -43,15 +45,15 @@ if __name__ == '__main__':
     num_heads = 3
     input_size = 120
     nvp_config = {
-        'n_couple_layer': 4,
-        'n_hid_layer': 4,
-        'n_hid_dim': 128,
+        'n_couple_layer': 3,
+        'n_hid_layer': 3,
+        'n_hid_dim': 512,
         'name': 'NVP'
     }
     model = TransformerAutoencoderNVP(num_layers=num_layers, d_model=d_model, num_heads=num_heads, dff=dff,
                                       input_size=input_size, nvp_config=nvp_config)
 
-    model.load_weights('logs/20230401-184209/modelTAE_weights')
+    model.load_weights('logs/20230403-132134/modelTAE_weights')
     datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, hp=str(200), seed=777),
                                               ratio=[0.9, 0.1],
                                               shuffle=True,
@@ -60,8 +62,9 @@ if __name__ == '__main__':
     for key in datasets:
         datasets[key].apply(OnlyValidAccTransform())
 
-    x_valid, y_valid = to_NVP_data(datasets['train'][:500], 479, -1)
+    x_valid, y_valid = to_NVP_data(datasets['train'], 479, -1)
 
+    '''
     diff = 0
     for x, y in zip(x_valid, y_valid):
         ops_idx = []
@@ -69,14 +72,8 @@ if __name__ == '__main__':
             ops_idx.append(np.argmax(x[i * 7: (i + 1) * 7], axis=-1))
         print(ops_idx)
 
-        rec, reg, enc = model(np.array([x]))
-        a = model.inverse(reg)
-        de = model.decode(tf.reshape(a, (1, -1, model.d_model))).numpy().reshape(-1)
-        ops_idx = []
-        for i in range(8):
-            ops_idx.append(np.argmax(de[i * 7: (i + 1) * 7], axis=-1))
-        print(ops_idx)
-
+        z = tf.random.normal(shape=[1, 479])
+        y = tf.concat([z, tf.constant([[y[-1]]])], axis=-1)
         a = model.inverse(y)
         de = model.decode(tf.reshape(a, (1, -1, model.d_model))).numpy().reshape(-1)
         ops_idx = []
@@ -84,23 +81,8 @@ if __name__ == '__main__':
             ops_idx.append(np.argmax(de[i * 7: (i + 1) * 7], axis=-1))
         print(ops_idx)
 
-
-        ops_idx = []
-        for i in range(8):
-            ops_idx.append(np.argmax(de[i * 7: (i + 1) * 7], axis=-1))
-        print(ops_idx)
-
-        z = np.random.multivariate_normal([1.] * 479, np.eye(479), 1).reshape(-1).astype(np.float32)
-        y = np.array([y[-1]]).astype(np.float32)
-        a = model.inverse(np.concatenate([z, y], axis=-1))
-        de = model.decode(tf.reshape(a, (1, -1, model.d_model))).numpy().reshape(-1)
-        ops_idx = []
-        for i in range(8):
-            ops_idx.append(np.argmax(de[i * 7: (i + 1) * 7], axis=-1))
-        print(ops_idx)
-
     print(diff)
-
+    '''
 
     to_inv_acc = 0.95
     invalid = 0
@@ -108,13 +90,14 @@ if __name__ == '__main__':
     y = []
     for ly in y_valid:
         try:
-            #ops_idx, adj = inverse_from_acc(model, num_sample_z=1, z_dim=120 * d_model - 1, to_inv_acc=ly[-1])
+            ops_idx, adj = inverse_from_acc(model, num_sample_z=50, z_dim=120 * d_model - 1, to_inv_acc=ly[-1])
+            '''
             a = model.inverse(ly)
             de = model.decode(tf.reshape(a, (1, -1, model.d_model))).numpy().reshape(-1)
             ops_idx = []
             for i in range(8):
                 ops_idx.append(np.argmax(de[i * 7: (i + 1) * 7], axis=-1))
-
+            '''
             ops = [OPS_by_IDX_201[i] for i in ops_idx]
             #print(ops)
             #print(adj)

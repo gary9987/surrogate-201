@@ -228,6 +228,39 @@ class TransformerAutoencoderNVP(TransformerAutoencoder):
         return self.nvp.inverse(z)
 
 
+class DiffusionModel(tf.keras.Model):
+    def __init__(self, latent_dim):
+        super(DiffusionModel, self).__init__()
+        self.latent_dim = latent_dim
+        self.diffusion_steps = 10
+
+        self.alpha = self.add_weight(shape=(1,), initializer='random_normal')
+        self.beta = self.add_weight(shape=(1,), initializer='random_normal')
+
+        self.encoder = tf.keras.Sequential([
+            tf.keras.layers.Input(shape=(latent_dim,)),
+            tf.keras.layers.Dense(latent_dim, activation='relu'),
+            tf.keras.layers.Dense(latent_dim, activation='relu'),
+            tf.keras.layers.Dense(latent_dim),
+        ])
+
+        self.decoder = tf.keras.Sequential([
+            tf.keras.layers.Input(shape=(latent_dim,)),
+            tf.keras.layers.Dense(latent_dim, activation='relu'),
+            tf.keras.layers.Dense(latent_dim, activation='relu'),
+            tf.keras.layers.Dense(latent_dim, activation='sigmoid'),
+        ])
+
+    def call(self, x):
+        z = self.encoder(x)
+        for t in range(self.diffusion_steps):
+            epsilon = tf.random.normal(tf.shape(z))
+            z = (1 - self.alpha) * z + self.beta * epsilon
+            z = z + self.alpha * self.decoder(z)
+        x_recon = self.decoder(z)
+        return x_recon
+
+
 class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
   def __init__(self, d_model, warmup_steps=4000):
     super().__init__()
