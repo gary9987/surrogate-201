@@ -745,11 +745,8 @@ class NVP(nn.Module):
         y = torch.cat((torch.randn(x.size(0), self.dim_z, device=self.device), y), dim=1)
         # Forward step:
         output = self.model(x)[0]
-        print('nvp output ', output.shape)
         l = torch.mean(self.loss_fit(output[:, self.dim_z:], y[:, self.dim_z:]))
-        print(l.shape)
         l += torch.mean(self.loss_latent(output, y))
-        print(l.shape)
         return l
 
     def backward_loss(self, x, y):
@@ -762,12 +759,11 @@ class NVP(nn.Module):
         y_rev = torch.cat((orig_z_perturbed, y), dim=1)
         y_rev_rand = torch.cat((torch.randn(x.size(0), self.dim_z, device=self.device), y), dim=1)
 
-        output_rev = self.model(y_rev, rev=True)
-        output_rev_rand = self.model(y_rev_rand, rev=True)
+        output_rev = self.model(y_rev, rev=True)[0]
+        output_rev_rand = self.model(y_rev_rand, rev=True)[0]
 
-        l_rev = (self.loss_latent(output_rev_rand, x))
-
-        l_rev += self.loss_fit(output_rev, x)
+        l_rev = 0.5 * self.loss_fit(output_rev_rand, x)
+        l_rev += 0.5 * self.loss_fit(output_rev, x)
 
         return l_rev
 

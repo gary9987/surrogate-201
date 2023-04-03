@@ -208,7 +208,7 @@ def main(args):
 def train(train_data, model, criterion, optimizer, epoch, device, alpha, data_config, log_dir):
     objs = util.AvgrageMeter()
     vae_objs = util.AvgrageMeter()
-    f_loss = util.AvgrageMeter()
+    f_loss_objs = util.AvgrageMeter()
     b_objs = util.AvgrageMeter()
     # TRAINING
 
@@ -225,7 +225,6 @@ def train(train_data, model, criterion, optimizer, epoch, device, alpha, data_co
         vae_loss, recon_loss, kl_loss, f_loss, _ = model(graph_batch)
         loss = vae_loss + f_loss
         torch.mean(torch.squeeze(loss), 0)
-        print(loss.shape)
         loss.backward()
 
         b_loss = model.backward(graph_batch)
@@ -235,13 +234,13 @@ def train(train_data, model, criterion, optimizer, epoch, device, alpha, data_co
         n = graph_batch[0].num_graphs
         objs.update(loss.data.item() + b_loss.data.item(), n)
         vae_objs.update(vae_loss.data.item(), n)
-        f_loss.update(f_loss.data.item(), n)
+        f_loss_objs.update(f_loss.data.item(), n)
         b_objs.update(b_loss.data.item(), n)
 
     config_dict = {
         'epoch': epoch,
         'vae_loss': vae_objs.avg,
-        'f_loss': f_loss.avg,
+        'f_loss': f_loss_objs.avg,
         'b_loss': b_objs.avg,
         'loss': objs.avg,
     }
