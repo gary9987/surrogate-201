@@ -767,6 +767,7 @@ class SVGE_nvp(nn.Module):
         self.model_config = model_config
         self.max_n = data_config['max_num_nodes']
         self.dim_target = dim_target
+        self.device = device
 
         self.Encoder = GNNEncoder(model_config['node_embedding_dim'], model_config['graph_embedding_dim'],
                                   model_config['gnn_iteration_layers'],
@@ -806,6 +807,38 @@ class SVGE_nvp(nn.Module):
         label_acc = torch.reshape(batch_list[0].valid_acc, (h_G_mean.size(0), -1))[:, -1:]
         l_rev_rand, l_rev = self.Accuracy.backward_loss(h_G_mean, label_acc)
         return l_rev_rand, l_rev
+
+    def invert(self, batch_list, num_samples_z=1):
+        h_G_mean, h_G_var = self.Encoder(batch_list[0].edge_index,
+                                         batch_list[0].node_atts,
+                                         batch_list[0].batch)
+        y = torch.reshape(batch_list[0].valid_acc, (h_G_mean.size(0), -1))[:, -1:]
+        zy = torch.cat((torch.randn(h_G_mean.size(0), self.Accuracy.dim_z, device=self.device), y), dim=1)
+        mean, _ = self.Accuracy(zy, rev=True)
+        for i in range(num_samples_z - 1):
+            zy = torch.cat((torch.randn(h_G_mean.size(0), self.Accuracy.dim_z, device=self.device), y), dim=1)
+            mean += self.Accuracy(zy, rev=True)[0]
+
+        mean = mean / num_samples_z
+
+        edges, node_atts, edge_list = self.Decoder.inference(mean)
+
+        return edges, node_atts, edge_list
+
+    def invert_from_acc(self, acc, num_samples_z=1):
+        y = torch.FloatTensor([[acc]]).to(self.device)
+        zy = torch.cat((torch.randn(1, self.Accuracy.dim_z, device=self.device), y), dim=1)
+        mean, _ = self.Accuracy(zy, rev=True)
+        for i in range(num_samples_z - 1):
+            zy = torch.cat((torch.randn(1, self.Accuracy.dim_z, device=self.device), y), dim=1)
+            mean += self.Accuracy(zy, rev=True)[0]
+
+        mean = mean / num_samples_z
+
+        edges, node_atts, edge_list = self.Decoder.inference(mean)
+
+        return edges, node_atts, edge_list
+
 
     def inference(self, data, sample=False, log_var=None, only_acc=False, only_embedding=False):
         if isinstance(data, torch.Tensor):
