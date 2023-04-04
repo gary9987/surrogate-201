@@ -41,10 +41,7 @@ parser.add_argument('--on_valid', type=int, default=1, help='if predict on valid
 parser.add_argument('--finetune_SVGE', action='store_true', help='if fine tuning SVGE pretrained model', default=False)
 parser.add_argument('--sample_amount', type=int, default=14061,
                     help='fine tuning VAE and surrogate on 14061 training data')
-parser.add_argument('--criterion', type=str, default='MSELoss',
-                    help='criterion function MSELoss or BPRLoss')
-parser.add_argument('--criterion_reduction', type=str, default='sum',
-                    help='criterion reduction mean or sum')
+
 
 args = parser.parse_args()
 
@@ -147,7 +144,7 @@ def main(args):
     #                              Model
     #
     ##############################################################################
-    model = eval(args.model)(model_config=model_config, data_config=data_config, dim_target=1).to(device)
+    model = eval(args.model)(model_config=model_config, data_config=data_config, dim_target=1, device=device).to(device)
     model_dict = model.state_dict()
 
     path_state_dict = args.path_state_dict
@@ -167,15 +164,8 @@ def main(args):
 
     logging.info("param size = %fMB", util.count_parameters_in_MB(model))
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=model_config['regression_learning_rate'])
-    scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.1, patience=10, verbose=True)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=model_config['regression_learning_rate'])
     alpha = model_config['regression_loss_proportion']
-    if args.criterion == 'MSELoss':
-        criterion = eval(args.criterion)(reduction=args.criterion_reduction)
-    elif args.criterion == 'BPRLoss':
-        criterion = eval(args.criterion)(device, reduction=args.criterion_reduction)
-    else:
-        criterion = eval(args.criterion)()
 
     ##############################################################################
     #
@@ -188,7 +178,7 @@ def main(args):
         logging.info('epoch: %s', epoch)
 
         # training
-        _ = train(train_data, model, criterion, optimizer, epoch, device, alpha, data_config, log_dir)
+        train_obj = train(train_data, model, optimizer, epoch, device, data_config, log_dir)
 
         if epoch % args.save_interval == 0:
             logger.info('save model checkpoint {}  '.format(epoch))
@@ -201,17 +191,16 @@ def main(args):
 
             # validation
         if epoch % 5 == 0:
-            valid_obj = infer(val_data, model, criterion, optimizer, epoch, device, alpha, data_config,
-                                             log_dir)
+            valid_obj = infer(val_data, model, epoch, device, data_config, log_dir)
 
 
-def train(train_data, model, criterion, optimizer, epoch, device, alpha, data_config, log_dir):
+def train(train_data, model, optimizer, epoch, device, data_config, log_dir):
     objs = util.AvgrageMeter()
     vae_objs = util.AvgrageMeter()
     f_loss_objs = util.AvgrageMeter()
-    b_objs = util.AvgrageMeter()
+    rev_objs = util.AvgrageMeter()
+    rev_rand_objs = util.AvgrageMeter()
     # TRAINING
-
 
     model.train()
 
@@ -227,7 +216,8 @@ def train(train_data, model, criterion, optimizer, epoch, device, alpha, data_co
         torch.mean(torch.squeeze(loss), 0)
         loss.backward()
 
-        b_loss = model.backward(graph_batch)
+        rev_rand_loss, rev_loss = model.backward(graph_batch)
+        b_loss = 0.5 * rev_rand_loss + 0.5 * rev_loss
         b_loss.backward()
 
         optimizer.step()
@@ -235,13 +225,15 @@ def train(train_data, model, criterion, optimizer, epoch, device, alpha, data_co
         objs.update(loss.data.item() + b_loss.data.item(), n)
         vae_objs.update(vae_loss.data.item(), n)
         f_loss_objs.update(f_loss.data.item(), n)
-        b_objs.update(b_loss.data.item(), n)
+        rev_rand_objs.update(rev_rand_loss.data.item(), n)
+        rev_objs.update(rev_loss.data.item(), n)
 
     config_dict = {
         'epoch': epoch,
         'vae_loss': vae_objs.avg,
         'f_loss': f_loss_objs.avg,
-        'b_loss': b_objs.avg,
+        'rev_loss': rev_objs.avg,
+        'rev_rand_loss': rev_rand_objs.avg,
         'loss': objs.avg,
     }
 
@@ -253,11 +245,12 @@ def train(train_data, model, criterion, optimizer, epoch, device, alpha, data_co
     return objs.avg
 
 
-def infer(val_data, model, criterion, optimizer, epoch, device, alpha, data_config, log_dir):
+def infer(val_data, model, epoch, device, data_config, log_dir):
     objs = util.AvgrageMeter()
     vae_objs = util.AvgrageMeter()
-    acc_objs = util.AvgrageMeter()
-    b_loss_objs = util.AvgrageMeter()
+    f_loss_objs = util.AvgrageMeter()
+    rev_objs = util.AvgrageMeter()
+    rev_rand_objs = util.AvgrageMeter()
 
     # VALIDATION
     preds = []
@@ -271,22 +264,24 @@ def infer(val_data, model, criterion, optimizer, epoch, device, alpha, data_conf
             for i in range(len(graph_batch)):
                 graph_batch[i].to(device)
             vae_loss, recon_loss, kl_loss, f_loss, _ = model(graph_batch)
-
             loss = vae_loss + f_loss
-            b_loss = model.backward(graph_batch)
+            rev_rand_loss, rev_loss = model.backward(graph_batch)
+            b_loss = 0.5 * rev_rand_loss + 0.5 * rev_loss
 
         n = graph_batch[0].num_graphs
-        objs.update(loss.data.item(), n)
+        objs.update(loss.data.item() + b_loss.data.item(), n)
         vae_objs.update(vae_loss.data.item(), n)
-        acc_objs.update(f_loss.data.item(), n)
-        b_loss_objs.update(b_loss.data.item(), n)
+        f_loss_objs.update(f_loss.data.item(), n)
+        rev_rand_objs.update(rev_rand_loss.data.item(), n)
+        rev_objs.update(rev_loss.data.item(), n)
 
     config_dict = {
         'epoch': epoch,
-        'vae_loss_val': vae_objs.avg,
-        'acc_loss_val': acc_objs.avg,
-        'b_loss_val': b_loss_objs.avg,
-        'loss-val': objs.avg,
+        'vae_loss': vae_objs.avg,
+        'f_loss': f_loss_objs.avg,
+        'rev_loss': rev_objs.avg,
+        'rev_rand_loss': rev_rand_objs.avg,
+        'loss': objs.avg,
     }
 
     with open(os.path.join(log_dir, 'loss.txt'), 'a') as file:

@@ -674,8 +674,8 @@ class SVGE_acc(nn.Module):
 
 
 
-from FrEIA.framework import InputNode, OutputNode, Node, ReversibleGraphNet
-from FrEIA.modules import GLOWCouplingBlock, PermuteRandom
+from FrEIA.framework import InputNode, OutputNode, Node, ReversibleGraphNet, SequenceINN
+from FrEIA.modules import GLOWCouplingBlock, PermuteRandom, AllInOneBlock
 
 
 def get_MMD_multiscale(device):
@@ -703,15 +703,14 @@ def get_MMD_multiscale(device):
     return MMD_multiscale
 
 
-def fit(input, target):
-    return torch.mean((input - target)**2)
-
-
 # Accuracy Prediction
 class NVP(nn.Module):
-    def __init__(self, model_config, dim_y):
+    def __init__(self, device, model_config, dim_y):
         super(NVP, self).__init__()
-        self.device = 'cuda'
+        def fit(input, target):
+            return torch.mean((input - target) ** 2)
+
+        self.device = device
         self.dim_x = model_config['graph_embedding_dim']
         self.dim_y = dim_y
         self.dim_z = self.dim_x - self.dim_y
@@ -723,20 +722,9 @@ class NVP(nn.Module):
             return nn.Sequential(nn.Linear(c_in, 512), nn.ReLU(),
                                  nn.Linear(512, c_out))
 
-        self.nodes = [InputNode(self.dim_x, name='input')]
-
-        for k in range(8):
-            self.nodes.append(Node(self.nodes[-1],
-                              GLOWCouplingBlock,
-                              {'subnet_constructor': subnet_fc, 'clamp': 2.0},
-                              name=F'coupling_{k}'))
-            self.nodes.append(Node(self.nodes[-1],
-                              PermuteRandom,
-                              {'seed': k},
-                              name=F'permute_{k}'))
-
-        self.nodes.append(OutputNode(self.nodes[-1], name='output'))
-        self.model = ReversibleGraphNet(self.nodes, verbose=False)
+        self.model = SequenceINN(self.dim_x)
+        for k in range(4):
+            self.model.append(AllInOneBlock, subnet_constructor=subnet_fc, permute_soft=True)
 
     def forward(self, x, rev=False):
         return self.model(x, rev=rev)
@@ -762,14 +750,14 @@ class NVP(nn.Module):
         output_rev = self.model(y_rev, rev=True)[0]
         output_rev_rand = self.model(y_rev_rand, rev=True)[0]
 
-        l_rev = 0.5 * self.loss_fit(output_rev_rand, x)
-        l_rev += 0.5 * self.loss_fit(output_rev, x)
+        l_rev_rand = self.loss_fit(output_rev_rand, x)
+        l_rev = self.loss_fit(output_rev, x)
 
-        return l_rev
+        return l_rev_rand, l_rev
 
 
 class SVGE_nvp(nn.Module):
-    def __init__(self, model_config, data_config, START_TYPE=1, END_TYPE=0, dim_target=1):
+    def __init__(self, model_config, data_config, device, START_TYPE=1, END_TYPE=0, dim_target=1):
         super().__init__()
         self.ndim = model_config['node_embedding_dim']
         self.gdim = model_config['graph_embedding_dim']
@@ -786,7 +774,7 @@ class SVGE_nvp(nn.Module):
         self.Decoder = GNNDecoder(model_config['node_embedding_dim'], model_config['graph_embedding_dim'],
                                   model_config['gnn_iteration_layers'], data_config['num_node_atts']
                                   , data_config['max_num_nodes'], model_config)
-        self.Accuracy = NVP(model_config, dim_target)
+        self.Accuracy = NVP(device, model_config, dim_target)
 
         self.START_TYPE = START_TYPE
         self.END_TYPE = END_TYPE
@@ -816,8 +804,8 @@ class SVGE_nvp(nn.Module):
                                          batch_list[0].node_atts,
                                          batch_list[0].batch)
         label_acc = torch.reshape(batch_list[0].valid_acc, (h_G_mean.size(0), -1))[:, -1:]
-        l = self.Accuracy.backward_loss(h_G_mean, label_acc)
-        return l
+        l_rev_rand, l_rev = self.Accuracy.backward_loss(h_G_mean, label_acc)
+        return l_rev_rand, l_rev
 
     def inference(self, data, sample=False, log_var=None, only_acc=False, only_embedding=False):
         if isinstance(data, torch.Tensor):
