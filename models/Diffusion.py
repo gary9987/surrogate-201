@@ -26,34 +26,76 @@ def forward_diffusion_process(x_0, t):
 
 
 
+class Down(tf.keras.layers.Layer):
+    def __init__(self, output_dim):
+        super(Down, self).__init__()
+        self.dense = tf.keras.layers.Dense(output_dim, activation='relu')
+        #  For project position encoding
+        self.emb_layer = tf.keras.layers.Dense(output_dim, activation='silu')
+
+    def call(self, inputs, t):
+        x = self.dense(inputs)
+        t_emb = self.emb_layer(t)
+        t_emb = tf.tile(t_emb, [tf.shape(x)[0], 1])
+        x = x + t_emb
+        return x
+
+
+class Up(tf.keras.layers.Layer):
+    def __init__(self, output_dim):
+        super(Up, self).__init__()
+        self.dense = tf.keras.layers.Dense(output_dim, activation='relu')
+        #  For project position encoding
+        self.emb_layer = tf.keras.layers.Dense(output_dim, activation='silu')
+
+    def call(self, inputs, t):
+        x = self.dense(inputs)
+        t_emb = self.emb_layer(t)
+        x = x + t_emb
+        return x
+
+
 class DiffusionModel(tf.keras.Model):
-    def __init__(self, input_dim, diffusion_steps):
+    def __init__(self, input_dim, diffusion_steps_t):
         super(DiffusionModel, self).__init__()
         self.latent_dim = input_dim
-        self.diffusion_steps = diffusion_steps
+        self.diffusion_steps_t = diffusion_steps_t
+        self.t_dim = diffusion_steps_t // 2 + 1
 
-        self.alpha = self.add_weight(shape=(1,), initializer='random_normal')
-        self.beta = self.add_weight(shape=(1,), initializer='random_normal')
+        self.down_list = [
+            Down(input_dim//2),
+            Down(input_dim // 4),
+            Down(input_dim // 6)
+        ]
 
-        self.down = tf.keras.Sequential([
-            tf.keras.layers.Input(shape=(input_dim,)),
-            tf.keras.layers.Dense(input_dim//2, activation='relu'),
-            tf.keras.layers.Dense(input_dim//2, activation='relu'),
-            tf.keras.layers.Dense(input_dim//4),
-        ])
+        self.up_list = [
+            Up(input_dim // 4),
+            Up(input_dim // 2),
+            Up(input_dim)
+        ]
 
-        self.up = tf.keras.Sequential([
-            tf.keras.layers.Input(shape=(input_dim//4,)),
-            tf.keras.layers.Dense(input_dim//2, activation='relu'),
-            tf.keras.layers.Dense(input_dim//2, activation='relu'),
-            tf.keras.layers.Dense(input_dim, activation='sigmoid'),
-        ])
+    def call(self, x, t):
+        t = tf.constant([t], dtype=tf.float32)
+        t = tf.expand_dims(self.pos_encoding(t, self.t_dim), axis=0)
+        for i in self.down_list:
+            x = i(x, t)
+        for i in self.up_list:
+            x = i(x, t)
+        return x
 
-    def call(self, x):
-        z = self.down(x)
-        for t in range(self.diffusion_steps):
-            epsilon = tf.random.normal(tf.shape(z))
-            z = (1 - self.alpha) * z + self.beta * epsilon
-            z = z + self.alpha * self.up(z)
-        x_recon = self.up(z)
-        return x_recon
+    def pos_encoding(self, t, channels):
+        inv_freq = 1.0 / (
+                10000 ** (tf.range(0, channels, 2, dtype=tf.float32) / channels)
+        )
+        pos_enc_a = tf.math.sin(tf.transpose(t) * inv_freq)
+        pos_enc_b = tf.math.cos(tf.transpose(t) * inv_freq)
+        pos_enc = tf.concat([pos_enc_a, pos_enc_b], axis=-1)
+        return pos_enc
+
+
+if __name__ == '__main__':
+    model = DiffusionModel(input_dim=20, diffusion_steps_t=20)
+    inp = tf.random.normal(shape=(2, 20))
+
+    a = model(inp, 1)
+    print(a)
