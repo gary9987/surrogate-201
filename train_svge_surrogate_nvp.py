@@ -217,7 +217,7 @@ def train(train_data, model, optimizer, epoch, device, data_config, log_dir):
         loss.backward()
 
         rev_rand_loss, rev_loss = model.backward(graph_batch)
-        b_loss = 0.5 * rev_rand_loss + 0.5 * rev_loss
+        b_loss = 5 * rev_rand_loss + 5 * rev_loss
         b_loss.backward()
 
         optimizer.step()

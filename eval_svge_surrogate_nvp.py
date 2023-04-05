@@ -22,6 +22,9 @@ from datasets.utils import ops_list_to_nb201_arch_str
 from nats_bench import create
 from models.SVGe import SVGE_nvp
 import argparse
+import matplotlib as mpl
+mpl.rcParams['figure.dpi'] = 300
+
 
 parser = argparse.ArgumentParser(description='Surrogate-Model-training')
 parser.add_argument('--model', type=str, default='SVGE_nvp')
@@ -171,7 +174,7 @@ def invert(train_data, model, device, data_config):
 
     data_loader = DataLoader(train_data, shuffle=True, num_workers=data_config['num_workers'], pin_memory=False,
                              batch_size=256)
-    '''
+
     for step, graph_batch in enumerate(data_loader):
 
         for i in range(len(graph_batch)):
@@ -200,12 +203,20 @@ def invert(train_data, model, device, data_config):
                 print(acc_l)
         except:
             print('invalid')
-    '''
+
+    plt.scatter(x, y, s=[1] * len(x))
+    plt.xlim(0.0, 1.)
+    plt.ylim(0.0, 1.)
+    plt.show()
+    plt.savefig('scatter0.png')
+    plt.cla()
+
+    x = []
+    y = []
     acc = 0.9500
     while acc >= 0.0500:
-
         try:
-            edges, node_atts, edge_list = model.invert_from_acc(acc, num_samples_z=1000)
+            edges, node_atts, edge_list = model.invert_from_acc(acc + 0.001 * random.random(), num_samples_z=1000)
             q_acc = acc
             ops_idxs = node_atts.cpu().numpy().tolist()
             for ops_idx in ops_idxs:
@@ -233,7 +244,7 @@ def invert(train_data, model, device, data_config):
     plt.xlim(0.0, 1.)
     plt.ylim(0.0, 1.)
     plt.show()
-    plt.savefig('scatter.png')
+    plt.savefig('scatter1.png')
 
 
 if __name__ == '__main__':

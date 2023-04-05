@@ -733,7 +733,7 @@ class NVP(nn.Module):
         y = torch.cat((torch.randn(x.size(0), self.dim_z, device=self.device), y), dim=1)
         # Forward step:
         output = self.model(x)[0]
-        l = torch.mean(self.loss_fit(output[:, self.dim_z:], y[:, self.dim_z:]))
+        l = 5 * torch.mean(self.loss_fit(output[:, self.dim_z:], y[:, self.dim_z:]))
         l += torch.mean(self.loss_latent(output, y))
         return l
 
