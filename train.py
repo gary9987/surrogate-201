@@ -6,7 +6,7 @@ import tensorflow as tf
 import logging
 import sys
 from datasets.nb201_dataset import NasBench201Dataset
-from datasets.utils_data import train_valid_test_split_dataset
+from datasets.utils import train_valid_test_split_dataset
 from spektral.data import BatchLoader
 from metrics import get_avg_kt, get_avg_r2, get_final_epoch_kt, get_final_epoch_r2
 
