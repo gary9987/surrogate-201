@@ -3,6 +3,7 @@ import tensorflow as tf
 import numpy as np
 from invertible_neural_networks.flow import NVP
 
+
 def positional_encoding(length, depth):
     depth = depth / 2
 
@@ -226,6 +227,7 @@ class TransformerAutoencoderNVP(TransformerAutoencoder):
 
     def inverse(self, z):
         return self.nvp.inverse(z)
+
 
 
 class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
