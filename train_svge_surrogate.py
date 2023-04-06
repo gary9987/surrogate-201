@@ -163,7 +163,7 @@ def main(args):
         for name, param in model.named_parameters():
             if name in m:
                 logging.info("Freeze the weight of %s", name)
-                param.required_grad = False
+                param.requires_grad = False
 
     logging.info("param size = %fMB", util.count_parameters_in_MB(model))
 
