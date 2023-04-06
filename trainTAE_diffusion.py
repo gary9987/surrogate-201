@@ -40,16 +40,8 @@ class Trainer(tf.keras.Model):
     def __init__(self, model):
         super(Trainer, self).__init__()
         self.model = model
-
-        # For rec loss weight
-        self.w0 = 1.
-        # For reg loss weight
-        self.w1 = 1
-        # For latent loss weight
-        self.w2 = 1.
-        # For rev loss weight
-        self.w3 = 1.
-
+        self.rec_loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)
+        self.noise_loss_fn = tf.keras.losses.MeanSquaredError()
 
     def train_step(self, data):
         x_batch_train, y_batch_train = data
@@ -57,24 +49,27 @@ class Trainer(tf.keras.Model):
         non_nan_idx = tf.reshape(tf.where(~tf.math.is_nan(tf.reduce_sum(y_batch_train, axis=-1))), -1)
 
         with tf.GradientTape() as tape:
-            rec_logits, noise_loss, _ = self.model(x_batch_train, y_batch_train)  # Logits for this minibatch
-
+            rec_logits, pred_noise, label_noise = self.model(x_batch_train, y_batch_train)  # Logits for this minibatch
+            noise_loss = self.noise_loss_fn(label_noise, pred_noise)
+            rec_loss = self.rec_loss_fn(x_batch_train, rec_logits)
+            loss = noise_loss + rec_loss
             #rec_loss = self.rec_loss_fn(x_batch_train, rec_logits)
             # To avoid nan loss when batch size is small
             # if tf.shape(non_nan_idx)[0] != 0:
 
-        grads = tape.gradient(noise_loss, self.model.trainable_weights)
+        grads = tape.gradient(loss, self.model.trainable_weights)
         optimizer.apply_gradients(zip(grads, self.model.trainable_weights))
-        #self.model.decoder.trainable = True
 
-        return {'noise_loss': noise_loss}
+        return {'loss': loss, 'rec_loss': rec_loss, 'noise_loss': noise_loss}
 
     def test_step(self, data):
         x_batch_train, y_batch_train = data
 
-        _, noise_loss, _ = self.model(x_batch_train, y_batch_train)  # Logits for this minibatch
-        return {'noise_loss': noise_loss}
-
+        rec_logits, pred_noise, label_noise = self.model(x_batch_train, y_batch_train)  # Logits for this minibatch
+        noise_loss = self.noise_loss_fn(label_noise, pred_noise)
+        rec_loss = self.rec_loss_fn(x_batch_train, rec_logits)
+        loss = noise_loss + rec_loss
+        return {'loss': loss, 'rec_loss': rec_loss, 'noise_loss': noise_loss}
 
 if __name__ == '__main__':
     is_only_validation_data = True
@@ -88,7 +83,7 @@ if __name__ == '__main__':
     diffusion_steps = 500
     input_size = 120
 
-    batch_size = 768
+    batch_size = 256
     train_epochs = 1000
     patience = 50
 
@@ -121,8 +116,8 @@ if __name__ == '__main__':
     loader = {'train': tf.data.Dataset.from_tensor_slices((x_train, y_train)).shuffle(1024).batch(batch_size=batch_size).repeat(),
               'valid': tf.data.Dataset.from_tensor_slices((x_valid, y_valid)).batch(batch_size=batch_size)}
 
-    model.encoder.trainable = False
-    model.decoder.trainable = False
+    #model.encoder.trainable = False
+    #model.decoder.trainable = False
     trainer = Trainer(model)
     trainer.compile(optimizer=optimizer, run_eagerly=True)
 

@@ -4,21 +4,16 @@ import tensorflow as tf
 class DoubleConv(tf.keras.layers.Layer):
     def __init__(self, out_c):
         super().__init__()
-        self.conv1 = tf.keras.Sequential([
-            tf.keras.layers.Conv2D(out_c, kernel_size=3, padding='same'),
+        self.conv = tf.keras.Sequential([
+            tf.keras.layers.Conv2D(out_c, kernel_size=3, padding='same', use_bias=False),
             tf.keras.layers.LayerNormalization(),
-            tf.keras.layers.ReLU()
-        ])
-        self.conv2 = tf.keras.Sequential([
-            tf.keras.layers.Conv2D(out_c, kernel_size=3, padding='same'),
-            tf.keras.layers.LayerNormalization(),
-            tf.keras.layers.ReLU()
+            tf.keras.layers.Activation(tf.nn.gelu),
+            tf.keras.layers.Conv2D(out_c, kernel_size=3, padding='same', use_bias=False),
+            tf.keras.layers.LayerNormalization()
         ])
 
     def call(self, x):
-        x = self.conv1(x)
-        x = self.conv2(x)
-        return x
+        return self.conv(x)
 
 
 class Down(tf.keras.layers.Layer):
@@ -26,7 +21,7 @@ class Down(tf.keras.layers.Layer):
         super().__init__()
         self.down = tf.keras.Sequential([
             tf.keras.layers.MaxPool2D(pool_size=(2, 2)),
-            DoubleConv(out_c, first_residual=True)
+            DoubleConv(out_c)
         ])
 
         self.emb_layer = tf.keras.Sequential([
@@ -36,7 +31,7 @@ class Down(tf.keras.layers.Layer):
 
     def call(self, x, t):
         x = self.down(x)
-        t_emb =  self.emb(t)[:, None, None, :]
+        t_emb =  self.emb_layer(t)[:, None, None, :]
         return x + t_emb
 
 
@@ -54,7 +49,7 @@ class Up(tf.keras.layers.Layer):
         x = self.up(x)
         x = tf.concat([skip_x, x], axis=-1)
         x = self.conv(x)
-        emb = self.emb_layer(t)[:, :, None, None]
+        emb = self.emb_layer(t)[:, None, None, :]
         #emb = tf.broadcast_to(emb, shape=[emb.shape[0], emb.shape[1], x.shape[2], x.shape[3]])
         return x + emb
 
@@ -83,7 +78,7 @@ class SelfAttention(tf.keras.layers.Layer):
         return attention_value
 
 
-class UNet(tf.keras.Model):
+class UNet(tf.keras.layers.Layer):
     def __init__(self, c_out, time_dim=128):
         super().__init__()
 
@@ -92,19 +87,11 @@ class UNet(tf.keras.Model):
 
         self.down1 = Down(128)
         self.sa1 = SelfAttention(128)
-        self.down2 = Down(256)
-        self.sa2 = SelfAttention(256)
-        self.down3 = Down(256)
-        self.sa3 = SelfAttention(256)
 
-        self.bot1 = DoubleConv(512)
-        self.bot2 = DoubleConv(512)
-        self.bot3 = DoubleConv(256)
+        self.bot1 = DoubleConv(256)
+        self.bot2 = DoubleConv(256)
+        self.bot3 = DoubleConv(128)
 
-        self.up1 = Up(128)
-        self.sa4 = SelfAttention(16)
-        self.up2 = Up(64)
-        self.sa5 = SelfAttention(32)
         self.up3 = Up(64)
         self.sa6 = SelfAttention(64)
 
@@ -118,22 +105,22 @@ class UNet(tf.keras.Model):
         # Down
         x2 = self.down1(x1, t)
         x2 = self.sa1(x2)
-        x3 = self.down2(x2, t)
-        x3 = self.sa2(x3)
-        x4 = self.down3(x3, t)
-        x4 = self.sa3(x4)
+        #x3 = self.down2(x2, t)
+        #x3 = self.sa2(x3)
+        #x4 = self.down3(x3, t)
+        #x4 = self.sa3(x4)
 
         # Bottle neck
-        x4 = self.bot1(x4)
+        x4 = self.bot1(x2)
         x4 = self.bot2(x4)
         x4 = self.bot3(x4)
 
         # Up
-        x = self.up1(x4, x3, t)
-        x = self.sa4(x)
-        x = self.up2(x, x2, t)
-        x = self.sa5(x)
-        x = self.up3(x, x1, t)
+        #x = self.up1(x4, x3, t)
+        #x = self.sa4(x)
+        #x = self.up2(x4, x2, t)
+        #x = self.sa5(x)
+        x = self.up3(x4, x1, t)
         x = self.sa6(x)
 
         # Output

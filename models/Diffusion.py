@@ -1,6 +1,7 @@
 import numpy as np
 import tensorflow as tf
 from models.TransformerAE import TransformerAutoencoder
+from models.UNet import UNet
 
 
 def linear_schedule(timesteps=500, start=0.0001, end=0.02):
@@ -55,7 +56,7 @@ class Up(tf.keras.layers.Layer):
         return x
 
 
-class DiffusionModel(tf.keras.Model):
+class DiffusionModel(tf.keras.layers.Layer):
     def __init__(self, input_dim, diffusion_steps_t):
         super(DiffusionModel, self).__init__()
         self.latent_dim = input_dim
@@ -64,24 +65,10 @@ class DiffusionModel(tf.keras.Model):
         # the max diffusion_steps_t should be < t_dim / 2
         # if diffusion_steps_t=20, then the range of diffusion_steps_t is [0, 19]
         self.t_dim = diffusion_steps_t * 2
-
-        self.down_list = [
-            Down(input_dim // 2),
-            Down(input_dim // 4),
-            Down(input_dim // 6)
-        ]
-
-        self.up_list = [
-            Up(input_dim // 4),
-            Up(input_dim // 2),
-            Up(input_dim)
-        ]
+        self.unet = UNet(input_dim, self.t_dim)
 
     def unet_forward(self, x, t):
-        for i in self.down_list:
-            x = i(x, t)
-        for i in self.up_list:
-            x = i(x, t)
+        x = self.unet(x, t)
         return x
 
     def call(self, x, t):
@@ -122,9 +109,8 @@ class TransformerAutoencoderDiffusion(TransformerAutoencoder):
         self.beta = self.prepare_noise_schedule()
         self.alpha = 1 - self.beta
 
-        self.MSE = tf.keras.losses.MeanSquaredError()
         self.alpha_hat = tf.math.cumprod(self.alpha, axis=0)
-        self.diffusion_model = ConditionalDiffusionModel(d_model * input_size, diffusion_steps)
+        self.diffusion_model = ConditionalDiffusionModel(d_model, diffusion_steps)
 
     def prepare_noise_schedule(self):
         return linear_schedule(timesteps=self.diffusion_steps)
@@ -140,24 +126,29 @@ class TransformerAutoencoderDiffusion(TransformerAutoencoder):
         sqrt_alpha_hat = tf.reshape(sqrt_alpha_hat, (tf.shape(x)[0], 1))
         sqrt_one_minus_alpha_hat = tf.reshape(sqrt_one_minus_alpha_hat, (tf.shape(x)[0], 1))
         noise = tf.random.normal(shape=x.shape, dtype=x.dtype)
+        # reshape to [batch_size, 1, 1, 1, ...]
+        sqrt_alpha_hat = tf.reshape(sqrt_alpha_hat, [tf.shape(x)[0]] + (len(tf.shape(x)) - 1) * [1])
+        sqrt_one_minus_alpha_hat = tf.reshape(sqrt_one_minus_alpha_hat, [tf.shape(x)[0]] + (len(tf.shape(x)) - 1) * [1])
         return sqrt_alpha_hat * x + sqrt_one_minus_alpha_hat * noise, noise
 
     def call(self, inputs, y):
 
         latent = self.encoder(inputs)  # (batch_size, context_len, d_model)
-        flat_encoding = tf.reshape(latent, (tf.shape(latent)[0], -1))
+        #flat_encoding = tf.reshape(latent, (tf.shape(latent)[0], -1))
+        #a = tf.cast(tf.math.sqrt(tf.shape(latent)[1]), tf.int32)
+        latent_img = tf.reshape(latent, [tf.shape(latent)[0], int(int(tf.shape(latent)[1]) ** 0.5), -1, self.d_model])
 
         # Noise Loss
         t = self.sample_t(batch_size=tf.shape(inputs)[0])
-        x_t, noise = self.add_noise(flat_encoding, t)
+        x_t, noise = self.add_noise(latent_img, t)
         pred_noise = self.diffusion_model(x_t, y, t)
-        noise_loss = self.MSE(noise, pred_noise)
+        #noise_loss = self.MSE(noise, pred_noise)
 
         # Reconstruction
         rec = self.decoder(latent)  # (batch_size, target_len, d_model)
 
         # Return the final output and the attention weights.
-        return rec, noise_loss, flat_encoding
+        return rec, pred_noise, noise
 
     def encode(self, inputs, training=True):
         encoding = self.encoder(inputs, training=training)
@@ -192,7 +183,12 @@ class TransformerAutoencoderDiffusion(TransformerAutoencoder):
         sqrt_one_minus_alpha_hat = tf.gather(self.sqrt_one_minus_alphas_hat, t)
         sqrt_recip_alpha = tf.gather(self.sqrt_recip_alphas, t)
         posterior_variance = tf.gather(self.posterior_variance, t)
+        shape = [tf.shape(x)[0]] + (len(tf.shape(x)) - 1) * [1]
 
+        beta = tf.reshape(beta, shape)
+        sqrt_one_minus_alpha_hat = tf.reshape(sqrt_one_minus_alpha_hat, shape)
+        sqrt_recip_alpha = tf.reshape(sqrt_recip_alpha, shape)
+        posterior_variance = tf.reshape(posterior_variance, shape)
         # Call model (current image - noise prediction)
         model_mean = sqrt_recip_alpha * (x - beta * self.diffusion_model(x, acc, t) / sqrt_one_minus_alpha_hat)
         noise = tf.sqrt(posterior_variance) * tf.random.normal(shape=x.shape, dtype=x.dtype)
@@ -211,11 +207,11 @@ if __name__ == '__main__':
                                             d_model=4,
                                             num_heads=3,
                                             dff=128,
-                                            input_size=5,
+                                            input_size=120,
                                             diffusion_steps=1000)
-    inp = tf.random.normal(shape=(2, 5))
 
-    a = model(inp, tf.constant([[90.], [92.]]))
+    inp = tf.random.normal(shape=(2, 120))
+    a, pred_noise, _ = model(inp, tf.constant([[90.], [92.]]))
 
-    x = model.denoise(tf.random.normal(shape=(2, 20)), tf.constant([[90.], [92.]]), tf.constant([[0], [1]]))
-    print(a, x)
+    x = model.denoise(tf.random.normal(shape=(2, 10, 12, 4)), tf.constant([[90.], [92.]]), tf.constant([[0], [1]]))
+    print(a.shape, pred_noise.shape, x.shape)
