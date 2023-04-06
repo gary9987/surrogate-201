@@ -99,3 +99,27 @@ def to_NVP_data_path_encode(graph_dataset, z_dim, reg_size):
     y_list[to_nan_idx, :] = np.nan
 
     return np.array(features).astype(np.float32), np.array(y_list).astype(np.float32)
+
+
+def to_latent_feature_data(graph_dataset, reg_size):
+    features = []
+    y_list = []
+    if reg_size == -1:
+        nan_size = 0
+    else:
+        nan_size = len(graph_dataset) - reg_size
+
+    to_nan_idx = np.random.choice(range(len(graph_dataset)), nan_size, replace=False)
+
+    for data in graph_dataset:
+        x = np.reshape(data.x, -1)
+        a = np.reshape(data.a, -1)
+        features.append(np.concatenate([x, a]))
+
+        y = np.array([data.y[-1] / 100.0])
+        y_list.append(y)
+
+    y_list = np.array(y_list)
+    y_list[to_nan_idx, :] = np.nan
+
+    return np.array(features).astype(np.float32), np.array(y_list).astype(np.float32)

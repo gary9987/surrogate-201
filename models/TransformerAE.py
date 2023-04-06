@@ -229,7 +229,6 @@ class TransformerAutoencoderNVP(TransformerAutoencoder):
         return self.nvp.inverse(z)
 
 
-
 class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
   def __init__(self, d_model, warmup_steps=4000):
     super().__init__()

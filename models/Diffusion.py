@@ -151,13 +151,13 @@ class TransformerAutoencoderDiffusion(TransformerAutoencoder):
         t = self.sample_t(batch_size=tf.shape(inputs)[0])
         x_t, noise = self.add_noise(flat_encoding, t)
         pred_noise = self.diffusion_model(x_t, y, t)
-        l_noise = self.MSE(noise, pred_noise)
+        noise_loss = self.MSE(noise, pred_noise)
 
         # Reconstruction
         rec = self.decoder(latent)  # (batch_size, target_len, d_model)
 
         # Return the final output and the attention weights.
-        return rec, l_noise, flat_encoding
+        return rec, noise_loss, flat_encoding
 
     def encode(self, inputs, training=True):
         encoding = self.encoder(inputs, training=training)
