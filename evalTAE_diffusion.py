@@ -20,12 +20,13 @@ def inverse_from_acc(model: TransformerAutoencoderDiffusion, num_sample_z: int, 
     num_ops = 7
     num_nodes = 8
 
-    noise = tf.random.normal(shape=[1, 480])
+    noise = tf.random.normal(shape=[1, 10, 12, 4])
     for i in range(model.diffusion_steps)[::-1]:
         acc = tf.constant(to_inv_acc, shape=[1, 1])
         t = tf.constant(i, shape=[1, 1])
         noise = model.denoise(noise, acc, t)
 
+    latent = tf.reshape(noise, (1, -1, model.d_model))
     rev_x = model.decode(tf.reshape(noise, (1, -1, model.d_model)))  # (num_sample_z, input_size(120))
 
     ops_vote = tf.reduce_sum(rev_x[:, :num_ops * num_nodes], axis=0).numpy()  # 7 ops 8 nodes
@@ -35,7 +36,7 @@ def inverse_from_acc(model: TransformerAutoencoderDiffusion, num_sample_z: int, 
     for i in range(num_nodes):
         ops_idx.append(np.argmax(ops_vote[i * num_ops: (i + 1) * num_ops], axis=-1))
 
-    return ops_idx, adj
+    return ops_idx, adj, latent
 
 
 if __name__ == '__main__':
@@ -44,14 +45,14 @@ if __name__ == '__main__':
     dff = 512
     num_layers = 3
     num_heads = 3
-    diffusion_steps = 1000
+    diffusion_steps = 500
     input_size = 120
 
     model = TransformerAutoencoderDiffusion(num_layers=num_layers, d_model=d_model, num_heads=num_heads, dff=dff,
                                             input_size=input_size, diffusion_steps=diffusion_steps,
                                             dropout_rate=dropout_rate)
 
-    model.load_weights('logs/trainTAE_diffusion/20230406-212800/modelTAE_weights')
+    model.load_weights('logs/trainTAE_diffusion/20230407-135542/modelTAE_weights')
     datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, hp=str(200), seed=777),
                                               ratio=[0.9, 0.1],
                                               shuffle=True,
@@ -67,7 +68,10 @@ if __name__ == '__main__':
     y = []
     for ly in y_valid:
         #try:
-        ops_idx, adj = inverse_from_acc(model, 1, to_inv_acc=ly[-1])
+        ops_idx, adj, latent = inverse_from_acc(model, 1, to_inv_acc=ly[-1])
+        true = model.encode(tf.constant([[x_valid[0]]]), training=False)
+        latent = tf.reshape(latent, (1, -1))
+        l = tf.keras.losses.MeanSquaredError()(true, latent)
         ops = [OPS_by_IDX_201[i] for i in ops_idx]
         #print(ops)
         #print(adj)

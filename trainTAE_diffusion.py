@@ -49,10 +49,10 @@ class Trainer(tf.keras.Model):
         non_nan_idx = tf.reshape(tf.where(~tf.math.is_nan(tf.reduce_sum(y_batch_train, axis=-1))), -1)
 
         with tf.GradientTape() as tape:
-            rec_logits, pred_noise, label_noise = self.model(x_batch_train, y_batch_train)  # Logits for this minibatch
+            rec_logits, pred_noise, label_noise, kl_loss = self.model(x_batch_train, y_batch_train)  # Logits for this minibatch
             noise_loss = self.noise_loss_fn(label_noise, pred_noise)
             rec_loss = self.rec_loss_fn(x_batch_train, rec_logits)
-            loss = noise_loss + rec_loss
+            loss = noise_loss + rec_loss + kl_loss
             #rec_loss = self.rec_loss_fn(x_batch_train, rec_logits)
             # To avoid nan loss when batch size is small
             # if tf.shape(non_nan_idx)[0] != 0:
@@ -60,16 +60,16 @@ class Trainer(tf.keras.Model):
         grads = tape.gradient(loss, self.model.trainable_weights)
         optimizer.apply_gradients(zip(grads, self.model.trainable_weights))
 
-        return {'loss': loss, 'rec_loss': rec_loss, 'noise_loss': noise_loss}
+        return {'loss': loss, 'rec_loss': rec_loss, 'noise_loss': noise_loss, 'kl_loss': kl_loss}
 
     def test_step(self, data):
         x_batch_train, y_batch_train = data
 
-        rec_logits, pred_noise, label_noise = self.model(x_batch_train, y_batch_train)  # Logits for this minibatch
+        rec_logits, pred_noise, label_noise, kl_loss = self.model(x_batch_train, y_batch_train)  # Logits for this minibatch
         noise_loss = self.noise_loss_fn(label_noise, pred_noise)
         rec_loss = self.rec_loss_fn(x_batch_train, rec_logits)
-        loss = noise_loss + rec_loss
-        return {'loss': loss, 'rec_loss': rec_loss, 'noise_loss': noise_loss}
+        loss = noise_loss + rec_loss + kl_loss
+        return {'loss': loss, 'rec_loss': rec_loss, 'noise_loss': noise_loss, 'kl_loss': kl_loss}
 
 if __name__ == '__main__':
     is_only_validation_data = True
@@ -106,8 +106,8 @@ if __name__ == '__main__':
     x_train, y_train = to_latent_feature_data(datasets['train'], -1)
     x_valid, y_valid = to_latent_feature_data(datasets['valid'], -1)
 
-    #learning_rate = CustomSchedule(d_model)
-    optimizer = tf.keras.optimizers.Adam(learning_rate=5e-3, beta_1=0.9, beta_2=0.98, epsilon=1e-5)
+    learning_rate = CustomSchedule(d_model)
+    optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9)
 
     model = TransformerAutoencoderDiffusion(num_layers=num_layers, d_model=d_model, num_heads=num_heads, dff=dff,
                                             input_size=input_size, diffusion_steps=diffusion_steps,
@@ -121,7 +121,7 @@ if __name__ == '__main__':
     trainer = Trainer(model)
     trainer.compile(optimizer=optimizer, run_eagerly=True)
 
-    print(len(datasets['train']))
+    logger.info(len(datasets['train']))
 
     tensorboard_callback = tf.keras.callbacks.TensorBoard(logdir, histogram_freq=1)
     trainer.fit(loader['train'],
@@ -131,7 +131,7 @@ if __name__ == '__main__':
                 steps_per_epoch=len(datasets['train']) // batch_size,
                 callbacks=[CSVLogger(os.path.join(logdir, "learning_curve.log")),
                            tensorboard_callback,
-                           #EarlyStopping(monitor='val_noise_loss', patience=patience, restore_best_weights=True)
+                           EarlyStopping(monitor='val_noise_loss', patience=patience, restore_best_weights=True)
                            ]
                 )
 

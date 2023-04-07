@@ -109,6 +109,8 @@ class Encoder(tf.keras.layers.Layer):
                          dropout_rate=dropout_rate)
             for _ in range(num_layers)]
         self.dropout = tf.keras.layers.Dropout(dropout_rate)
+        self.mean_emb = tf.keras.layers.Dense(d_model)
+        self.var_emb = tf.keras.layers.Dense(d_model)
 
     def call(self, x):
         # `x` is token-IDs shape: (batch, seq_len)
@@ -120,7 +122,9 @@ class Encoder(tf.keras.layers.Layer):
         for i in range(self.num_layers):
             x = self.enc_layers[i](x)
 
-        return x  # Shape `(batch_size, seq_len, d_model)`.
+        x_mean = self.mean_emb(x)
+        x_var = self.var_emb(x)
+        return x_mean, x_var  # Shape `(batch_size, seq_len, d_model)`.
 
 
 class Decoder(tf.keras.layers.Layer):
