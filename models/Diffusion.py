@@ -103,8 +103,11 @@ class ConditionalDiffusionModel(DiffusionModel):
 
 class TransformerAutoencoderDiffusion(TransformerAutoencoder):
     def __init__(self, *, num_layers, d_model, num_heads, dff,
-                 input_size, diffusion_steps, dropout_rate=0.0):
-        super(TransformerAutoencoderDiffusion, self).__init__(num_layers=num_layers, d_model=d_model, num_heads=num_heads, dff=dff, input_size=input_size, dropout_rate=dropout_rate)
+                 input_size,  num_ops, num_nodes, num_adjs, diffusion_steps, dropout_rate=0.0):
+        super(TransformerAutoencoderDiffusion, self).__init__(num_layers=num_layers, d_model=d_model,
+                                                              num_heads=num_heads, dff=dff, input_size=input_size,
+                                                              num_ops=num_ops, num_nodes=num_nodes, num_adjs=num_adjs,
+                                                              dropout_rate=dropout_rate)
         self.diffusion_steps = diffusion_steps
         self.beta = self.prepare_noise_schedule()
         self.alpha = 1 - self.beta
@@ -131,36 +134,17 @@ class TransformerAutoencoderDiffusion(TransformerAutoencoder):
         sqrt_one_minus_alpha_hat = tf.reshape(sqrt_one_minus_alpha_hat, [tf.shape(x)[0]] + (len(tf.shape(x)) - 1) * [1])
         return sqrt_alpha_hat * x + sqrt_one_minus_alpha_hat * noise, noise
 
-    def sample(self, mean, log_var, eps_scale=0.01):
-        eps = tf.random.normal(shape=mean.shape)
-        return mean + tf.exp(log_var * 0.5) * eps * eps_scale
-
     def call(self, inputs, y):
-
-        latent_mean, latent_var = self.encoder(inputs)  # (batch_size, context_len, d_model)
-        c = self.sample(latent_mean, latent_var)
-
-        latent_mean = tf.reshape(latent_mean, (tf.shape(latent_mean)[0], -1))
-        latent_var = tf.reshape(latent_var, (tf.shape(latent_var)[0], -1))
-
-        kl_loss = -0.5 * tf.reduce_sum(1 + latent_var - tf.square(latent_mean) - tf.exp(latent_var), axis=-1)
-        kl_loss = tf.reduce_mean(kl_loss)
-
-        #flat_encoding = tf.reshape(latent, (tf.shape(latent)[0], -1))
-        #a = tf.cast(tf.math.sqrt(tf.shape(latent)[1]), tf.int32)
-        latent_img = tf.reshape(c, [tf.shape(c)[0], int(int(tf.shape(c)[1]) ** 0.5), -1, self.d_model])
+        ops_cls, adj_cls, kl_loss, latent_mean = super().call(inputs)
+        latent_mean = tf.reshape(latent_mean, [tf.shape(latent_mean)[0], -1])
+        latent_img = tf.reshape(latent_mean, [tf.shape(latent_mean)[0], int(int(tf.shape(latent_mean)[1]) ** 0.5), -1, self.d_model])
 
         # Noise Loss
         t = self.sample_t(batch_size=tf.shape(inputs)[0])
         x_t, noise = self.add_noise(latent_img, t)
         pred_noise = self.diffusion_model(x_t, y, t)
-        #noise_loss = self.MSE(noise, pred_noise)
 
-        # Reconstruction
-        rec = self.decoder(c)  # (batch_size, target_len, d_model)
-
-        # Return the final output and the attention weights.
-        return rec, pred_noise, noise, kl_loss
+        return ops_cls, adj_cls, pred_noise, noise, kl_loss
 
     def encode(self, inputs, training=True):
         encoding = self.encoder(inputs, training=training)

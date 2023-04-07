@@ -129,11 +129,14 @@ class Encoder(tf.keras.layers.Layer):
 
 class Decoder(tf.keras.layers.Layer):
     def __init__(self, *, num_layers, d_model, num_heads,
-                 dff, dropout_rate=0.1):
+                 dff, num_ops, num_nodes, num_adjs, dropout_rate=0.1):
         super(Decoder, self).__init__()
 
         self.d_model = d_model
         self.num_layers = num_layers
+        self.num_ops = num_ops
+        self.num_nodes = num_nodes
+        self.num_adjs = num_adjs
 
         self.dec_layers = [
             EncoderLayer(d_model=d_model,
@@ -142,7 +145,12 @@ class Decoder(tf.keras.layers.Layer):
                          dropout_rate=dropout_rate)
             for _ in range(num_layers)]
         self.dropout = tf.keras.layers.Dropout(dropout_rate)
-        self.final_layer = tf.keras.layers.Dense(2)
+
+        self.ops_cls = [
+            tf.keras.layers.Dense(num_ops, activation='softmax')
+            for _ in range(num_nodes)
+        ]
+        self.adj_cls = tf.keras.layers.Dense(2, activation='softmax')
 
     def call(self, x):
         # `x` is token-IDs shape: (batch, seq_len)
@@ -154,36 +162,51 @@ class Decoder(tf.keras.layers.Layer):
             x = self.dec_layers[i](x)
         # Shape `(batch_size, seq_len, d_model)`.
 
-        x = self.final_layer(x)
-        x = tf.nn.softmax(x, axis=-1)
-        return x
+        flatten_x = tf.reshape(x, (tf.shape(x)[0], -1))
+        ops_cls = tf.stack([self.ops_cls[i](flatten_x) for i in range(self.num_nodes)], axis=-1)
+        ops_cls = tf.transpose(ops_cls, (0, 2, 1))  # Shape `(batch_size, num_nodes, num_ops)`
+        adj_cls = self.adj_cls(x[:, :self.num_adjs, :])
+        return ops_cls, adj_cls
 
 
 class TransformerAutoencoder(tf.keras.Model):
     def __init__(self, *, num_layers, d_model, num_heads, dff,
-                 input_size, dropout_rate=0.1):
+                 input_size, num_ops, num_nodes, num_adjs, dropout_rate=0.1):
         super().__init__()
         self.d_model = d_model
+        self.num_ops = num_ops
+        self.num_adjs = num_adjs
+        self.num_nodes = num_nodes
         self.encoder = Encoder(num_layers=num_layers, d_model=d_model, num_heads=num_heads,
                                dff=dff, input_size=input_size, dropout_rate=dropout_rate)
 
         self.decoder = Decoder(num_layers=num_layers, d_model=d_model, num_heads=num_heads,
-                               dff=dff, dropout_rate=dropout_rate)
+                               dff=dff, num_ops=num_ops, num_nodes=num_nodes, num_adjs=num_adjs,
+                               dropout_rate=dropout_rate)
+
+    def sample(self, mean, log_var, eps_scale=0.01):
+        eps = tf.random.normal(shape=mean.shape)
+        return mean + tf.exp(log_var * 0.5) * eps * eps_scale
 
     def call(self, inputs):
-        context = inputs
+        latent_mean, latent_var = self.encoder(inputs)  # (batch_size, context_len, d_model)
+        c = self.sample(latent_mean, latent_var)
+        kl_loss = tf.reduce_mean(-0.5 * tf.reduce_sum(1 + latent_var - tf.square(latent_mean) - tf.exp(latent_var), axis=-1))
 
-        context = self.encoder(context)  # (batch_size, context_len, d_model)
-        x = self.decoder(context)  # (batch_size, target_len, d_model)
+        ops_cls, adj_cls = self.decoder(c)  # (batch_size, target_len, d_model)
 
-        # Return the final output and the attention weights.
-        return x
+        # Return the final output
+        return ops_cls, adj_cls, kl_loss, latent_mean
 
     def encode(self, inputs):
         return self.encoder(inputs)
 
     def decode(self, inputs):
-        return tf.cast(tf.argmax(self.decoder(inputs), axis=-1), tf.float32)
+        ops_cls, adj_cls = self.decoder(inputs)
+        for i in range(len(ops_cls)):
+            ops_cls[i] = tf.argmax(ops_cls[i], axis=-1)
+        adj_cls = tf.argmax(adj_cls, axis=-1)
+        return ops_cls, adj_cls
 
 
 class TransformerAutoencoderReg(TransformerAutoencoder):
@@ -193,39 +216,34 @@ class TransformerAutoencoderReg(TransformerAutoencoder):
         self.reg_mlp = RegMLP(h_dim=dff, target_dim=1, dropout_rate=dropout_rate)
 
     def call(self, inputs):
-
-        latent = self.encoder(inputs)  # (batch_size, context_len, d_model)
-
+        ops_cls, adj_cls, kl_loss, latent_mean = super().call(inputs)
         # Regression
-        reg = self.reg_mlp(tf.reshape(latent, (tf.shape(latent)[0], -1)))  # (batch_size, 1)
-        # Reconstruction
-        rec = self.decoder(latent)  # (batch_size, target_len, d_model)
+        reg = self.reg_mlp(tf.reshape(latent_mean, (tf.shape(latent_mean)[0], -1)))  # (batch_size, 1)
 
         # Return the final output and the attention weights.
-        return rec, reg
+        return ops_cls, adj_cls, kl_loss, reg, latent_mean
 
 
 class TransformerAutoencoderNVP(TransformerAutoencoder):
     def __init__(self, *, num_layers, d_model, num_heads, dff,
-                 input_size, nvp_config, dropout_rate=0.1):
-        super(TransformerAutoencoderNVP, self).__init__(num_layers=num_layers, d_model=d_model, num_heads=num_heads, dff=dff, input_size=input_size, dropout_rate=dropout_rate)
+                 input_size, num_ops, num_nodes, num_adjs, nvp_config, dropout_rate=0.1):
+        super(TransformerAutoencoderNVP, self).__init__(num_layers=num_layers, d_model=d_model, num_heads=num_heads,
+                                                        dff=dff, input_size=input_size, num_ops=num_ops,
+                                                        num_nodes=num_nodes,num_adjs=num_adjs,
+                                                        dropout_rate=dropout_rate)
         self.nvp = NVP(inp_dim=d_model * input_size, **nvp_config)
 
     def call(self, inputs):
-
-        latent = self.encoder(inputs)  # (batch_size, context_len, d_model)
-        flat_encoding = tf.reshape(latent, (tf.shape(latent)[0], -1))
-
+        ops_cls, adj_cls, kl_loss, latent_mean = super().call(inputs)
+        flat_encoding = tf.reshape(latent_mean, (tf.shape(latent_mean)[0], -1))
         # Regression
         reg = self.nvp(flat_encoding)  # (batch_size, 1)
-        # Reconstruction
-        rec = self.decoder(latent)  # (batch_size, target_len, d_model)
 
         # Return the final output and the attention weights.
-        return rec, reg, flat_encoding
+        return ops_cls, adj_cls, kl_loss, reg, flat_encoding
 
     def encode(self, inputs, training=True):
-        encoding = self.encoder(inputs, training=training)
+        encoding = super().encode(inputs)
         flat_encoding = tf.reshape(encoding, (tf.shape(encoding)[0], -1))
         return flat_encoding
 
