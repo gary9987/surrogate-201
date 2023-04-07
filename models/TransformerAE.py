@@ -203,10 +203,11 @@ class TransformerAutoencoder(tf.keras.Model):
 
     def decode(self, inputs):
         ops_cls, adj_cls = self.decoder(inputs)
+        ops = []
         for i in range(len(ops_cls)):
-            ops_cls[i] = tf.argmax(ops_cls[i], axis=-1)
-        adj_cls = tf.argmax(adj_cls, axis=-1)
-        return ops_cls, adj_cls
+            ops.append(tf.argmax(ops_cls[i], axis=-1))
+        adj = tf.cast(tf.argmax(adj_cls, axis=-1), tf.float32)
+        return ops, adj, ops_cls, adj_cls
 
 
 class TransformerAutoencoderReg(TransformerAutoencoder):

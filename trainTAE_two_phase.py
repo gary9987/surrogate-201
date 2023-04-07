@@ -36,11 +36,17 @@ random_seed = 0
 tf.random.set_seed(random_seed)
 
 
+num_ops = 7
+num_nodes = 8
+num_adjs = 64
+
+
 class Trainer1(tf.keras.Model):
-    def __init__(self, model: TransformerAutoencoderNVP, rec_loss_fn):
+    def __init__(self, model: TransformerAutoencoderNVP):
         super(Trainer1, self).__init__()
         self.model = model
-        self.rec_loss_fn = rec_loss_fn
+        self.ce_loss_fn = tf.keras.losses.CategoricalCrossentropy(from_logits=False)
+        self.sce_loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)
 
     def train_step(self, data):
         self.model.nvp.trainable = False
@@ -55,27 +61,33 @@ class Trainer1(tf.keras.Model):
             # The operations that the layer applies
             # to its inputs are going to be recorded
             # on the GradientTape.
-            rec_logits, _, _ = self.model(x_batch_train, training=True)  # Logits for this minibatch
-
-            rec_loss = self.rec_loss_fn(x_batch_train, rec_logits)
+            ops_cls, adj_cls, kl_loss, _, _ = self.model(x_batch_train, training=True)  # Logits for this minibatch
+            ops_label = tf.reshape(x_batch_train[:, :num_ops*num_nodes], (tf.shape(x_batch_train)[0], num_nodes, num_ops))
+            adj_label = x_batch_train[:, num_ops*num_nodes:]
+            ops_loss = self.ce_loss_fn(ops_label, ops_cls)
+            adj_loss = self.sce_loss_fn(adj_label, adj_cls)
+            rec_loss = ops_loss + adj_loss + kl_loss
 
         grads = tape.gradient(rec_loss, self.model.trainable_weights)
         self.optimizer.apply_gradients(zip(grads, self.model.trainable_weights))
 
         self.model.nvp.trainable = True
 
-        return {'rec_loss': rec_loss}
+        return {'rec_loss': rec_loss, 'ops_loss': ops_loss, 'adj_loss': adj_loss, 'kl_loss': kl_loss}
 
     def test_step(self, data):
         x_batch_train, _ = data
-        rec_logits, _, _ = self.model(x_batch_train, training=True)  # Logits for this minibatch
-        rec_loss = self.rec_loss_fn(x_batch_train, rec_logits)
-        return {'rec_loss': rec_loss}
+        ops_cls, adj_cls, kl_loss, _, _ = self.model(x_batch_train, training=True)  # Logits for this minibatch
+        ops_label = tf.reshape(x_batch_train[:, :num_ops * num_nodes], (tf.shape(x_batch_train)[0], num_nodes, num_ops))
+        adj_label = x_batch_train[:, num_ops * num_nodes:]
+        ops_loss = self.ce_loss_fn(ops_label, ops_cls)
+        adj_loss = self.sce_loss_fn(adj_label, adj_cls)
+        rec_loss = ops_loss + adj_loss + kl_loss
+        return {'rec_loss': rec_loss, 'ops_loss': ops_loss, 'adj_loss': adj_loss, 'kl_loss': kl_loss}
 
 
 class Trainer2(tf.keras.Model):
-    def __init__(self, model: TransformerAutoencoderNVP, reg_loss_fn,
-                 x_dim, y_dim, z_dim):
+    def __init__(self, model: TransformerAutoencoderNVP, x_dim, y_dim, z_dim):
         super(Trainer2, self).__init__()
         self.model = model
         self.x_dim = x_dim
@@ -89,7 +101,7 @@ class Trainer2(tf.keras.Model):
         # For rev loss weight
         self.w3 = 10.
 
-        self.reg_loss_fn = reg_loss_fn
+        self.reg_loss_fn = tf.keras.losses.MeanSquaredError()
         self.loss_latent = MMD_multiscale
         self.loss_backward = MSE
 
@@ -111,7 +123,7 @@ class Trainer2(tf.keras.Model):
             # The operations that the layer applies
             # to its inputs are going to be recorded
             # on the GradientTape.
-            rec_logits, y_out, x_encoding = self.model(x_batch_train, training=True)  # Logits for this minibatch
+            _, _, _, y_out, x_encoding = self.model(x_batch_train, training=True)  # Logits for this minibatch
 
             # To avoid nan loss when batch size is small
             if tf.shape(non_nan_idx)[0] != 0:
@@ -143,8 +155,11 @@ class Trainer2(tf.keras.Model):
 
         # Backward loss
         with tf.GradientTape() as tape:
-            _, _, x_encoding = self.model(x_batch_train, training=True)  # Logits for this minibatch
-            x_rev = self.model.inverse(tf.gather(y_batch_train, non_nan_idx))
+            y = tf.gather(y, non_nan_idx)
+            z = tf.gather(z, non_nan_idx)
+            y = y + 0.0001 * tf.random.normal(shape=y.shape)
+            _, _, _, _, x_encoding = self.model(x_batch_train, training=True)  # Logits for this minibatch
+            x_rev = self.model.inverse(tf.concat([z, y], axis=-1))
             rev_loss = self.loss_backward(x_rev, tf.gather(x_encoding, non_nan_idx))  # * x_batch_train.shape[0]
             loss = self.w3 * rev_loss
 
@@ -165,7 +180,7 @@ class Trainer2(tf.keras.Model):
         z = y_batch_train[:, :z_dim]
         y_short = tf.concat([z, y], axis=-1)
 
-        rec_logits, y_out, x_encoding = self.model(x_batch_train, training=False)  # Logits for this minibatch
+        _, _, _, y_out, x_encoding = self.model(x_batch_train, training=False)  # Logits for this minibatch
 
         reg_loss = self.reg_loss_fn(y_batch_train[:, z_dim:], y_out[:, z_dim:])
         latent_loss = self.loss_latent(y_short, tf.concat([y_out[:, :z_dim], y_out[:, -y_dim:]], axis=-1))  # * x_batch_train.shape[0]
@@ -178,12 +193,12 @@ class Trainer2(tf.keras.Model):
                 'rev_loss': rev_loss}
 
 
-def train(phase: int, model, loader, batch_size, train_epochs, steps_per_epoch, callbacks=None, reg_loss_fn=None, rec_loss_fn=None, x_dim=None, y_dim=None, z_dim=None):
+def train(phase: int, model, loader, batch_size, train_epochs, steps_per_epoch, callbacks=None, x_dim=None, y_dim=None, z_dim=None):
     optimizer = tf.keras.optimizers.Adam(CustomSchedule(d_model), beta_1=0.9, beta_2=0.98, epsilon=1e-9)
     if phase == 1:
-        trainer = Trainer1(model, rec_loss_fn)
+        trainer = Trainer1(model)
     elif phase == 2:
-        trainer = Trainer2(model, reg_loss_fn, x_dim, y_dim, z_dim)
+        trainer = Trainer2(model, x_dim, y_dim, z_dim)
 
     trainer.compile(optimizer=optimizer, run_eagerly=True)
     trainer.fit(loader['train'],
@@ -200,8 +215,8 @@ if __name__ == '__main__':
     is_only_validation_data = True
     label_epochs = 200
 
-    train_phase = [1, 1]  # 0 not train, 1 train
-    pretrained_phase1_weight = 'logs/4l245h/modelTAE_weights_phase1.index'
+    train_phase = [0, 1]  # 0 not train, 1 train
+    pretrained_phase1_weight = 'logs/20230407-230734/modelTAE_weights_phase1'
     d_model = 4
     dropout_rate = 0.0
     dff = 512
@@ -214,7 +229,7 @@ if __name__ == '__main__':
         'name': 'NVP'
     }
 
-    batch_size = 512
+    batch_size = 256
     train_epochs = 1000
     patience = 100
 
@@ -243,11 +258,9 @@ if __name__ == '__main__':
     x_valid, y_valid = to_NVP_data(datasets['valid'], z_dim, -1)
 
 
-    #tf.keras.losses.Reduction.SUM
-    rec_loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)
-    reg_loss_fn = tf.keras.losses.MeanSquaredError()
-
-    model = TransformerAutoencoderNVP(num_layers=num_layers, d_model=d_model, num_heads=num_heads, dff=dff, input_size=x_train.shape[-1], nvp_config=nvp_config, dropout_rate=dropout_rate)
+    model = TransformerAutoencoderNVP(num_layers=num_layers, d_model=d_model, num_heads=num_heads,
+                                      dff=dff, input_size=x_train.shape[-1], num_ops=num_ops, num_nodes=num_nodes,
+                                      num_adjs=num_adjs, nvp_config=nvp_config, dropout_rate=dropout_rate)
 
     loader = {'train': tf.data.Dataset.from_tensor_slices((x_train, y_train)).shuffle(1024).batch(batch_size=batch_size).repeat(),
               'valid': tf.data.Dataset.from_tensor_slices((x_valid, y_valid)).batch(batch_size=batch_size)}
@@ -261,7 +274,7 @@ if __name__ == '__main__':
         callbacks = [CSVLogger(os.path.join(logdir, "learning_curve_phase1.log")),
                      tensorboard_callback,
                      EarlyStopping(monitor='val_rec_loss', patience=20, restore_best_weights=True)]
-        train(1, model, loader, batch_size, train_epochs, steps_per_epoch, callbacks, rec_loss_fn=rec_loss_fn)
+        train(1, model, loader, batch_size, train_epochs, steps_per_epoch, callbacks)
     else:
         model.load_weights(pretrained_phase1_weight)
 
@@ -270,7 +283,7 @@ if __name__ == '__main__':
         callbacks = [CSVLogger(os.path.join(logdir, f"learning_curve_phase2.log")),
                      tensorboard_callback,
                      EarlyStopping(monitor='val_total_loss', patience=patience, restore_best_weights=True)]
-        train(2, model, loader, batch_size, train_epochs, steps_per_epoch, callbacks, reg_loss_fn=reg_loss_fn,
+        train(2, model, loader, batch_size, train_epochs, steps_per_epoch, callbacks,
               x_dim=x_dim, y_dim=y_dim, z_dim=z_dim)
     else:
         model.load_weights(pretrained_phase1_weight)

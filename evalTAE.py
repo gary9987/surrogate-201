@@ -18,26 +18,27 @@ tf.random.set_seed(random_seed)
 
 
 def inverse_from_acc(model: tf.keras.Model, num_sample_z: int, z_dim: int, to_inv_acc: float):
-    num_ops = 7
-    num_nodes = 8
     y = np.array([to_inv_acc] * num_sample_z).reshape((num_sample_z, -1))  # (num_sample_z, 1)
     z = np.random.multivariate_normal([1.] * z_dim, np.eye(z_dim), num_sample_z)  # (num_sample_z, z_dim)
     y = np.concatenate([z, y], axis=-1).astype(np.float32)  # (num_sample_z, x_dim)
 
     rev_latent = model.inverse(y)  # (num_sample_z, x_dim(input_size*d_model ))
-    rev_x = model.decode(tf.reshape(rev_latent, (num_sample_z, -1, model.d_model)))  # (num_sample_z, input_size(120))
+    _, adj, ops_cls, adj_cls = model.decode(tf.reshape(rev_latent, (num_sample_z, -1, model.d_model)))  # (num_sample_z, input_size(120))
 
-    ops_vote = tf.reduce_sum(rev_x[:, :num_ops * num_nodes], axis=0).numpy()  # 7 ops 8 nodes
-    adj = tf.where(tf.reduce_mean(rev_x[:, num_ops * num_nodes:], axis=0) >= 0.5, x=1., y=0.).numpy()  # (1, 8 * 8)
+    ops_vote = tf.reduce_sum(ops_cls, axis=0).numpy()  # (1, 8 * 7)
+    adj = tf.where(tf.reduce_mean(adj, axis=0) >= 0.5, x=1., y=0.).numpy()  # (1, 8 * 8)
     adj = np.reshape(adj, (int(adj.shape[-1]**(1/2)), int(adj.shape[-1]**(1/2))))
     ops_idx = []
-    for i in range(num_nodes):
-        ops_idx.append(np.argmax(ops_vote[i * num_ops: (i + 1) * num_ops], axis=-1))
+    for i in ops_vote:
+        ops_idx.append(np.argmax(i))
 
     return ops_idx, adj
 
 
 if __name__ == '__main__':
+    num_ops = 7
+    num_nodes = 8
+    num_adjs = 64
     d_model = 4
     dropout_rate = 0.0
     dff = 512
@@ -45,15 +46,16 @@ if __name__ == '__main__':
     num_heads = 3
     input_size = 120
     nvp_config = {
-        'n_couple_layer': 3,
-        'n_hid_layer': 3,
-        'n_hid_dim': 512,
+        'n_couple_layer': 4,
+        'n_hid_layer': 4,
+        'n_hid_dim': 256,
         'name': 'NVP'
     }
     model = TransformerAutoencoderNVP(num_layers=num_layers, d_model=d_model, num_heads=num_heads, dff=dff,
-                                      input_size=input_size, nvp_config=nvp_config)
+                                      input_size=input_size, nvp_config=nvp_config,
+                                      num_ops=num_ops, num_nodes=num_nodes, num_adjs=num_adjs)
 
-    model.load_weights('logs/20230403-132134/modelTAE_weights')
+    model.load_weights('logs/20230407-221623/modelTAE_weights_phase2')
     datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, hp=str(200), seed=777),
                                               ratio=[0.9, 0.1],
                                               shuffle=True,
@@ -84,28 +86,19 @@ if __name__ == '__main__':
     print(diff)
     '''
 
-    to_inv_acc = 0.95
     invalid = 0
+    nb201api = create(None, 'tss', fast_mode=True, verbose=False)
     x = []
     y = []
     for ly in y_valid:
         try:
             ops_idx, adj = inverse_from_acc(model, num_sample_z=50, z_dim=120 * d_model - 1, to_inv_acc=ly[-1])
-            '''
-            a = model.inverse(ly)
-            de = model.decode(tf.reshape(a, (1, -1, model.d_model))).numpy().reshape(-1)
-            ops_idx = []
-            for i in range(8):
-                ops_idx.append(np.argmax(de[i * 7: (i + 1) * 7], axis=-1))
-            '''
             ops = [OPS_by_IDX_201[i] for i in ops_idx]
-            #print(ops)
-            #print(adj)
 
+            print(adj)
             arch_str = ops_list_to_nb201_arch_str(ops)
             print(arch_str)
 
-            nb201api = create(None, 'tss', fast_mode=True, verbose=False)
             idx = nb201api.query_index_by_arch(arch_str)
 
             acc = 0
@@ -125,7 +118,9 @@ if __name__ == '__main__':
             print(acc_l)
         except:
             invalid += 1
+
     '''
+    to_inv_acc = 0.95
     while to_inv_acc >= 0.60:
         for i in range(20):
             ops_idx, adj = inverse_from_acc(model, num_sample_z=10000, z_dim=120 * d_model-1, to_inv_acc=to_inv_acc)
