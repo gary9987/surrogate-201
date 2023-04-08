@@ -136,7 +136,6 @@ class TransformerAutoencoderDiffusion(TransformerAutoencoder):
 
     def call(self, inputs, y):
         ops_cls, adj_cls, kl_loss, latent_mean = super().call(inputs)
-        latent_mean = tf.reshape(latent_mean, [tf.shape(latent_mean)[0], -1])
         latent_img = tf.reshape(latent_mean, [tf.shape(latent_mean)[0], int(int(tf.shape(latent_mean)[1]) ** 0.5), -1, self.d_model])
 
         # Noise Loss

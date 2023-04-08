@@ -17,22 +17,29 @@ np.random.seed(random_seed)
 tf.random.set_seed(random_seed)
 
 
-def inverse_from_acc(model: tf.keras.Model, num_sample_z: int, z_dim: int, to_inv_acc: float):
-    y = np.array([to_inv_acc] * num_sample_z).reshape((num_sample_z, -1))  # (num_sample_z, 1)
-    z = np.random.multivariate_normal([1.] * z_dim, np.eye(z_dim), num_sample_z)  # (num_sample_z, z_dim)
-    y = np.concatenate([z, y], axis=-1).astype(np.float32)  # (num_sample_z, x_dim)
+def inverse_from_acc(model: tf.keras.Model, num_sample_z: int, z_dim: int, to_inv_acc):
+    batch_size = int(tf.shape(to_inv_acc)[0])
+    y = tf.repeat(to_inv_acc, num_sample_z, axis=0) # (batch_size * num_sample_z, 1)
+
+    z = np.random.multivariate_normal([1.] * z_dim, np.eye(z_dim), size=batch_size * num_sample_z)  # (num_sample_z, z_dim)
+    y = np.concatenate([z, y], axis=-1).astype(np.float32)  # (num_sample_z, z_dim + 1)
 
     rev_latent = model.inverse(y)  # (num_sample_z, x_dim(input_size*d_model ))
-    _, adj, ops_cls, adj_cls = model.decode(tf.reshape(rev_latent, (num_sample_z, -1, model.d_model)))  # (num_sample_z, input_size(120))
+    _, adj, ops_cls, adj_cls = model.decode(tf.reshape(rev_latent, (tf.shape(rev_latent)[0], -1, model.d_model)))  # (num_sample_z, input_size(120))
+    ops_cls = tf.reshape(ops_cls, (batch_size, num_sample_z, -1, model.num_ops)) # (batch_size, num_sample_z, 8, 7)
+    ops_vote = tf.reduce_sum(ops_cls, axis=1).numpy()  # (batch_size, 1, 8 * 7)
 
-    ops_vote = tf.reduce_sum(ops_cls, axis=0).numpy()  # (1, 8 * 7)
-    adj = tf.where(tf.reduce_mean(adj, axis=0) >= 0.5, x=1., y=0.).numpy()  # (1, 8 * 8)
-    adj = np.reshape(adj, (int(adj.shape[-1]**(1/2)), int(adj.shape[-1]**(1/2))))
-    ops_idx = []
-    for i in ops_vote:
-        ops_idx.append(np.argmax(i))
+    adj = tf.reshape(adj, (batch_size, num_sample_z, model.num_adjs))  # (batch_size, num_sample_z, 8 * 8)
+    adj = tf.where(tf.reduce_mean(adj, axis=1) >= 0.5, x=1., y=0.).numpy()  # (batch_size, 8 * 8)
+    adj = np.reshape(adj, (batch_size, int(adj.shape[-1]**(1/2)), int(adj.shape[-1]**(1/2))))
 
-    return ops_idx, adj
+    ops_idx_list = []
+    adj_list = []
+    for i, j in zip(ops_vote, adj):
+        ops_idx_list.append(np.argmax(i, axis=-1).tolist())
+        adj_list.append(j)
+
+    return ops_idx_list, adj_list
 
 
 if __name__ == '__main__':
@@ -55,7 +62,7 @@ if __name__ == '__main__':
                                       input_size=input_size, nvp_config=nvp_config,
                                       num_ops=num_ops, num_nodes=num_nodes, num_adjs=num_adjs)
 
-    model.load_weights('logs/20230407-221623/modelTAE_weights_phase2')
+    model.load_weights('logs/20230408-003521/modelTAE_weights_phase2')
     datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, hp=str(200), seed=777),
                                               ratio=[0.9, 0.1],
                                               shuffle=True,
@@ -64,8 +71,8 @@ if __name__ == '__main__':
     for key in datasets:
         datasets[key].apply(OnlyValidAccTransform())
 
-    x_valid, y_valid = to_NVP_data(datasets['train'], 479, -1)
-
+    x_valid, y_valid = to_NVP_data(datasets['valid'], 479, -1)
+    loader = tf.data.Dataset.from_tensor_slices((x_valid, y_valid)).batch(batch_size=256)
     '''
     diff = 0
     for x, y in zip(x_valid, y_valid):
@@ -90,34 +97,34 @@ if __name__ == '__main__':
     nb201api = create(None, 'tss', fast_mode=True, verbose=False)
     x = []
     y = []
-    for ly in y_valid:
-        try:
-            ops_idx, adj = inverse_from_acc(model, num_sample_z=50, z_dim=120 * d_model - 1, to_inv_acc=ly[-1])
-            ops = [OPS_by_IDX_201[i] for i in ops_idx]
+    for _, label_acc in loader:
+        ops_idx_lis, adj_list = inverse_from_acc(model, num_sample_z=50, z_dim=120 * d_model - 1, to_inv_acc=label_acc[:, -1:])
 
-            print(adj)
-            arch_str = ops_list_to_nb201_arch_str(ops)
-            print(arch_str)
+        for ops_idx, adj, query_acc in zip(ops_idx_lis, adj_list, label_acc[:, -1]):
+            try:
+                ops_str_list = [OPS_by_IDX_201[i] for i in ops_idx]
+                #print(adj)
+                arch_str = ops_list_to_nb201_arch_str(ops_str_list)
+                #print(arch_str)
 
-            idx = nb201api.query_index_by_arch(arch_str)
+                arch_idx = nb201api.query_index_by_arch(arch_str)
 
-            acc = 0
-            acc_l = [ly[-1]]
-            for seed in [777, 888]:
-                data = nb201api.get_more_info(idx, 'cifar10-valid', iepoch=199, hp='200', is_random=seed)
-                #print(data['valid-accuracy'])
-                acc += data['valid-accuracy'] / 100.
-                acc_l.append(data['valid-accuracy'])
+                accumulate_acc = 0
+                acc_list = [float(query_acc)]
+                for seed in [777, 888]:
+                    data = nb201api.get_more_info(arch_idx, 'cifar10-valid', iepoch=199, hp='200', is_random=seed)
+                    accumulate_acc += data['valid-accuracy'] / 100.
+                    acc_list.append(data['valid-accuracy'] / 100.)
 
-                data = nb201api.get_more_info(idx, 'cifar10', iepoch=199, hp='200', is_random=seed)
-                #print(data['test-accuracy'])
+                    # data = nb201api.get_more_info(arch_idx, 'cifar10', iepoch=199, hp='200', is_random=seed)
+                    # print(data['test-accuracy'])
 
-            acc /= 2
-            x.append(ly[-1])
-            y.append(acc)
-            print(acc_l)
-        except:
-            invalid += 1
+                x.append(float(query_acc))
+                y.append(accumulate_acc / 2)
+                print(acc_list)  # [query_acc, 777_acc, 888_acc]
+            except:
+                print('invalid')
+                invalid += 1
 
     '''
     to_inv_acc = 0.95
@@ -149,7 +156,7 @@ if __name__ == '__main__':
 
         to_inv_acc -= 0.005
     '''
-    print(invalid)
+    print('Number of invalid decode', invalid)
     plt.scatter(x, y, s=[1]*len(x))
     plt.xlim(0., 1.)
     plt.ylim(0., 1.)
