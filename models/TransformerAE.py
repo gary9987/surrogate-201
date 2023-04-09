@@ -165,7 +165,7 @@ class Decoder(tf.keras.layers.Layer):
         flatten_x = tf.reshape(x, (tf.shape(x)[0], -1))
         ops_cls = tf.stack([self.ops_cls[i](flatten_x) for i in range(self.num_nodes)], axis=-1)
         ops_cls = tf.transpose(ops_cls, (0, 2, 1))  # Shape `(batch_size, num_nodes, num_ops)`
-        adj_cls = self.adj_cls(x[:, :self.num_adjs, :])
+        adj_cls = self.adj_cls(x[:, -self.num_adjs:, :])  # Shape `(batch_size, num_adjs, 2)`
         return ops_cls, adj_cls
 
 
