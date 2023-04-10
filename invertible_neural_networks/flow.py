@@ -17,18 +17,18 @@ class NN(tfkl.Layer):
     '''
     Reused from https://github.com/MokkeMeguru/glow-realnvp-tutorial
     '''
-    def __init__(self, n_dim, n_layer=3, n_hid=512, activation='relu', name='fc_layer'):
+    def __init__(self, n_dim, n_layer=3, n_hid=512, activation='relu', name='fc_layer', use_bias=True):
         super(NN, self).__init__(name=name)
         self.n_dim = n_dim
         self.n_layer = n_layer
         self.n_hid = n_hid
         self.layer_list = []
         for _ in range(n_layer):
-            self.layer_list.append(tfkl.Dense(n_hid, activation=activation))
+            self.layer_list.append(tfkl.Dense(n_hid, activation=activation, use_bias=use_bias))
         self.log_s_layer = tfkl.Dense(
-            n_dim//2, activation='tanh', name='log_s_layer')
+            n_dim//2, activation='tanh', name='log_s_layer', use_bias=True)
         self.t_layer = tfkl.Dense(
-            n_dim//2, activation='linear', name='t_layer')
+            n_dim//2, activation='linear', name='t_layer', use_bias=True)
 
     def call(self, x):
         for layer in self.layer_list:
@@ -107,7 +107,7 @@ class NVPCouplingLayer(tfkl.Layer):
 
 
 class TwoNVPCouplingLayers(tfkl.Layer):
-    def __init__(self, inp_dim, n_hid_layer, n_hid_dim, name, shuffle_type):
+    def __init__(self, inp_dim, n_hid_layer, n_hid_dim, name, shuffle_type, use_bias=True):
         super(TwoNVPCouplingLayers, self).__init__(name=name)
         '''Implementation of Coupling layers in Ardizzone et al (2018)
 
@@ -122,8 +122,8 @@ class TwoNVPCouplingLayers(tfkl.Layer):
         self.n_hid_layer = n_hid_layer
         self.n_hid_dim = n_hid_dim
         self.shuffle_type = shuffle_type
-        self.nn1 = NN(inp_dim, n_hid_layer, n_hid_dim)
-        self.nn2 = NN(inp_dim, n_hid_layer, n_hid_dim)
+        self.nn1 = NN(inp_dim, n_hid_layer, n_hid_dim, use_bias=use_bias)
+        self.nn2 = NN(inp_dim, n_hid_layer, n_hid_dim, use_bias=use_bias)
         self.idx = tf.Variable(list(range(self.inp_dim)),
                                shape=(self.inp_dim,),
                                trainable=False,
@@ -178,7 +178,7 @@ class TwoNVPCouplingLayers(tfkl.Layer):
 
 
 class NVP(tfk.Model):
-    def __init__(self, inp_dim, n_couple_layer, n_hid_layer, n_hid_dim, name, shuffle_type='reverse'):
+    def __init__(self, inp_dim, n_couple_layer, n_hid_layer, n_hid_dim, name, shuffle_type='reverse', use_bias=True):
         super(NVP, self).__init__(name=name)
         self.inp_dim = inp_dim
         self.n_couple_layer = n_couple_layer
@@ -189,7 +189,7 @@ class NVP(tfk.Model):
         for i in range(n_couple_layer):
             layer = TwoNVPCouplingLayers(
                 inp_dim, n_hid_layer, n_hid_dim,
-                name=f'Layer{i}', shuffle_type=shuffle_type)
+                name=f'Layer{i}', shuffle_type=shuffle_type, use_bias=use_bias)
             self.AffineLayers.append(layer)
 
     def call(self, x):
