@@ -43,7 +43,7 @@ def ops_list_to_nb201_arch_str(ops):
     return nodes_nb201
 
 
-def to_NVP_data(graph_dataset, z_dim, reg_size):
+def to_NVP_data(graph_dataset, z_dim, reg_size, repeat=1):
     features = []
     y_list = []
     if reg_size == -1:
@@ -62,9 +62,15 @@ def to_NVP_data(graph_dataset, z_dim, reg_size):
         y = np.array([data.y[-1] / 100.0])
         y_list.append(y)
 
-    y_list = np.array(y_list)
+    y_list = np.array(y_list).astype(np.float32).repeat(repeat, axis=0)
+    features = np.array(features).astype(np.float32).repeat(repeat, axis=0)
     z = np.random.multivariate_normal([0.] * z_dim, np.eye(z_dim), y_list.shape[0])
     y_list = np.concatenate([z, y_list], axis=-1)
+
+    to_nan_idx = to_nan_idx * repeat
+    to_nan_idx_repeat = to_nan_idx
+    for i in to_nan_idx:
+        to_nan_idx_repeat = np.concatenate([to_nan_idx_repeat, i + np.arange(1, repeat)])
     y_list[to_nan_idx, :] = np.nan
 
     return np.array(features).astype(np.float32), np.array(y_list).astype(np.float32)
