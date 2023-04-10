@@ -153,6 +153,7 @@ def main(args):
 
     model_dict.update(m)
     model.load_state_dict(model_dict)
+    model.eval()
 
     logging.info("param size = %fMB", util.count_parameters_in_MB(model))
 

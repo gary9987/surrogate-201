@@ -157,6 +157,8 @@ if __name__ == '__main__':
         to_inv_acc -= 0.005
     '''
     print('Number of invalid decode', invalid)
+    fig, ax = plt.subplots()
+    ax.axline((0, 0), slope=1, linewidth=0.2, color='black')
     plt.scatter(x, y, s=[1]*len(x))
     plt.xlim(0., 1.)
     plt.ylim(0., 1.)
