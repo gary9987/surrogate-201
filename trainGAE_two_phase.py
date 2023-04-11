@@ -57,7 +57,7 @@ class Trainer1(tf.keras.Model):
         self.sce_loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)
         self.ops_weight = 1
         self.adj_weight = 1
-        self.kl_weight = 1
+        self.kl_weight = 0.1
 
     def to_undiredted_adj(self, adj):
         undirected_adj = tf.cast(tf.cast(adj, tf.int32) | tf.cast(tf.transpose(adj, perm=[0, 2, 1]), tf.int32), tf.float32)
@@ -249,7 +249,7 @@ def train(phase: int, model, loader, batch_size, train_epochs, steps_per_epoch, 
                 steps_per_epoch=steps_per_epoch,
                 callbacks=callbacks,
                 **kw)
-    model.save_weights(os.path.join(logdir, f'modelTAE_weights_phase{phase}'))
+    model.save_weights(os.path.join(logdir, f'modelGAE_weights_phase{phase}'))
     return trainer
 
 
@@ -260,13 +260,14 @@ if __name__ == '__main__':
     train_phase = [1, 0]  # 0 not train, 1 train
 
     repeat = 1
+    eps_scale = 0.1
     d_model = 32
     dropout_rate = 0.0
-    dff = 512
+    dff = 256
     num_layers = 3
     num_heads = 3
     finetune = False
-
+    latent_dim = 16
     batch_size = 256
     train_epochs = 1000
     patience = 100
@@ -296,9 +297,10 @@ if __name__ == '__main__':
     #x_test, y_test = to_NVP_data(datasets['test'], z_dim, -1)
 
 
-    model = GraphAutoencoder(num_layers=num_layers, d_model=d_model, num_heads=num_heads,
-                                      dff=dff, num_ops=num_ops, num_nodes=num_nodes,
-                                      num_adjs=num_adjs, dropout_rate=dropout_rate)
+    model = GraphAutoencoder(latent_dim=latent_dim, num_layers=num_layers,
+                             d_model=d_model, num_heads=num_heads,
+                             dff=dff, num_ops=num_ops, num_nodes=num_nodes,
+                             num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=eps_scale)
     #pretrained_model.build(input_shape=(1, 120))
     
     #model = TransformerAutoencoderNVP(num_layers=num_layers, d_model=d_model, num_heads=num_heads,
@@ -319,6 +321,11 @@ if __name__ == '__main__':
 
     if train_phase[0]:
         logger.info('Train phase 1')
+        class SaveModelCallback(tf.keras.callbacks.Callback):
+            def on_epoch_end(self, epoch, logs=None):
+                if (epoch + 1) % 50 == 0:
+                    self.model.save_weights(os.path.join(logdir, 'model_{:04d}.ckpt'.format(epoch + 1)))
+
         callbacks = [CSVLogger(os.path.join(logdir, "learning_curve_phase1.log")),
                      tensorboard_callback,
                      EarlyStopping(monitor='val_rec_loss', patience=patience, restore_best_weights=True)]

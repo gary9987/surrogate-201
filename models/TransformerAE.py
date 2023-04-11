@@ -173,12 +173,13 @@ class Decoder(tf.keras.layers.Layer):
 
 class TransformerAutoencoder(tf.keras.Model):
     def __init__(self, *, num_layers, d_model, num_heads, dff,
-                 input_size, num_ops, num_nodes, num_adjs, dropout_rate=0.1):
+                 input_size, num_ops, num_nodes, num_adjs, eps_scale=0.01, dropout_rate=0.1):
         super().__init__()
         self.d_model = d_model
         self.num_ops = num_ops
         self.num_adjs = num_adjs
         self.num_nodes = num_nodes
+        self.eps_scale = eps_scale
         self.encoder = Encoder(num_layers=num_layers, d_model=d_model, num_heads=num_heads,
                                dff=dff, input_size=input_size, dropout_rate=dropout_rate)
 
@@ -192,7 +193,7 @@ class TransformerAutoencoder(tf.keras.Model):
 
     def call(self, inputs):
         latent_mean, latent_var = self.encoder(inputs)  # (batch_size, context_len, d_model)
-        c = self.sample(latent_mean, latent_var)
+        c = self.sample(latent_mean, latent_var, self.eps_scale)
         kl_loss = tf.reduce_mean(-0.5 * tf.reduce_sum(1 + latent_var - tf.square(latent_mean) - tf.exp(latent_var), axis=-1))
 
         ops_cls, adj_cls = self.decoder(c)  # (batch_size, target_len, d_model)
@@ -229,10 +230,10 @@ class TransformerAutoencoderReg(TransformerAutoencoder):
 
 class TransformerAutoencoderNVP(TransformerAutoencoder):
     def __init__(self, *, num_layers, d_model, num_heads, dff,
-                 input_size, num_ops, num_nodes, num_adjs, nvp_config, dropout_rate=0.1):
+                 input_size, num_ops, num_nodes, num_adjs, nvp_config, eps_scale=0.01, dropout_rate=0.1):
         super(TransformerAutoencoderNVP, self).__init__(num_layers=num_layers, d_model=d_model, num_heads=num_heads,
                                                         dff=dff, input_size=input_size, num_ops=num_ops,
-                                                        num_nodes=num_nodes,num_adjs=num_adjs,
+                                                        num_nodes=num_nodes,num_adjs=num_adjs, eps_scale=eps_scale,
                                                         dropout_rate=dropout_rate)
         self.nvp = NVP(inp_dim=d_model * input_size, **nvp_config)
 

@@ -79,22 +79,37 @@ class TransformerDecoder(Decoder):
         super(TransformerDecoder, self).__init__(num_layers, d_model, num_heads, dff, num_ops, num_nodes, num_adjs,
                                                  dropout_rate)
         self.pos_embedding = PositionalEmbedding(d_model=d_model, input_length=input_length)
+        self.adj_cls = [
+            Dense(2, activation='softmax')
+            for _ in range(num_adjs)
+        ]
 
     def call(self, x):
         x = self.pos_embedding(x)
-        ops_cls, adj_cls = super().call(x)
+        x = self.dropout(x)
+        for i in range(self.num_layers):
+            x = self.dec_layers[i](x)
+
+        flatten_x = tf.reshape(x, (tf.shape(x)[0], -1))
+        ops_cls = tf.stack([self.ops_cls[i](flatten_x) for i in range(self.num_nodes)], axis=-1)
+        ops_cls = tf.transpose(ops_cls, (0, 2, 1))
+
+        adj_cls = tf.stack([self.adj_cls[i](flatten_x) for i in range(self.num_adjs)], axis=-1)
+        adj_cls = tf.transpose(adj_cls, (0, 2, 1))
+
         return ops_cls, adj_cls
 
 
 class GraphAutoencoder(tf.keras.Model):
-    def __init__(self, *, num_layers, d_model, num_heads, dff, num_ops, num_nodes, num_adjs, dropout_rate=0.0):
+    def __init__(self, *, latent_dim, num_layers, d_model, num_heads, dff, num_ops, num_nodes, num_adjs, eps_scale=0.01, dropout_rate=0.0):
         super(GraphAutoencoder, self).__init__()
         self.d_model = d_model
         self.num_ops = num_ops
         self.num_adjs = num_adjs
         self.num_nodes = num_nodes
-        self.latent_dim = num_ops * num_nodes + num_adjs
-        self.encoder = GINEncoder(self.latent_dim, [128, 128, 128, 128, self.latent_dim], 'relu', dropout_rate)
+        self.latent_dim = latent_dim
+        self.eps_scale = eps_scale
+        self.encoder = GINEncoder(self.latent_dim, [128, 128, 128, 128], 'relu', dropout_rate)
 
         self.decoder = TransformerDecoder(num_layers=num_layers, d_model=d_model, num_heads=num_heads,
                                dff=dff, input_length=self.latent_dim, num_ops=num_ops, num_nodes=num_nodes, num_adjs=num_adjs,
@@ -106,7 +121,7 @@ class GraphAutoencoder(tf.keras.Model):
 
     def call(self, inputs):
         latent_mean, latent_var = self.encoder(inputs)  # (batch_size, context_len, d_model)
-        c = self.sample(latent_mean, latent_var)
+        c = self.sample(latent_mean, latent_var, self.eps_scale)
         kl_loss = tf.reduce_mean(-0.5 * tf.reduce_sum(1 + latent_var - tf.square(latent_mean) - tf.exp(latent_var), axis=-1))
 
         ops_cls, adj_cls = self.decoder(c)  # (batch_size, target_len, d_model)
