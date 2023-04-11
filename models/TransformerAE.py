@@ -128,7 +128,7 @@ class Encoder(tf.keras.layers.Layer):
 
 
 class Decoder(tf.keras.layers.Layer):
-    def __init__(self, *, num_layers, d_model, num_heads,
+    def __init__(self, num_layers, d_model, num_heads,
                  dff, num_ops, num_nodes, num_adjs, dropout_rate=0.1):
         super(Decoder, self).__init__()
 
@@ -166,6 +166,8 @@ class Decoder(tf.keras.layers.Layer):
         ops_cls = tf.stack([self.ops_cls[i](flatten_x) for i in range(self.num_nodes)], axis=-1)
         ops_cls = tf.transpose(ops_cls, (0, 2, 1))  # Shape `(batch_size, num_nodes, num_ops)`
         adj_cls = self.adj_cls(x[:, -self.num_adjs:, :])  # Shape `(batch_size, num_adjs, 2)`
+        # Notice: This is old and wrong code:
+        # adj_cls = self.adj_cls(x[:, :self.num_adjs, :])  # Shape `(batch_size, num_adjs, 2)`
         return ops_cls, adj_cls
 
 

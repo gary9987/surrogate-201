@@ -57,8 +57,6 @@ def to_NVP_data(graph_dataset, z_dim, reg_size, repeat=1):
         x = np.reshape(data.x, -1)
         a = np.reshape(data.a, -1)
         features.append(np.concatenate([x, a]))
-
-        #z = np.reshape(np.random.multivariate_normal([0.]*z_dim, np.eye(z_dim), 1), -1)
         y = np.array([data.y[-1] / 100.0])
         y_list.append(y)
 
