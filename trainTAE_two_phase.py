@@ -206,7 +206,8 @@ class Trainer2(tf.keras.Model):
         ops_cls, adj_cls, kl_loss, y_out, x_encoding = self.model(x_batch_train, training=False)  # Logits for this minibatch
 
         reg_loss = self.reg_loss_fn(y_batch_train[:, z_dim:], y_out[:, z_dim:])
-        latent_loss = self.loss_latent(y_short, tf.concat([y_out[:, :z_dim], y_out[:, -y_dim:]], axis=-1))  # * x_batch_train.shape[0]
+        latent_loss = self.loss_latent(y_short, tf.concat([y_out[:, :z_dim], y_out[:, -y_dim:]],
+                                                          axis=-1))  # * x_batch_train.shape[0]
         x_rev = self.model.inverse(y_batch_train)
         rev_loss = self.loss_backward(x_rev, x_encoding)  # * x_batch_train.shape[0]
         if self.finetune:
@@ -248,21 +249,22 @@ if __name__ == '__main__':
     label_epochs = 200
 
     train_phase = [0, 1]  # 0 not train, 1 train
-    pretrained_phase1_weight = 'logs/20230409-191344/modelTAE_weights_phase1'
-    d_model = 32
-    dropout_rate = 0.1
+    pretrained_phase1_weight = 'logs/phase1_model/modelTAE_weights_phase1'
+    repeat = 1
+    d_model = 4
+    dropout_rate = 0.0
     dff = 512
-    num_layers = 6
-    num_heads = 6
+    num_layers = 3
+    num_heads = 3
     nvp_config = {
-        'n_couple_layer': 1,
-        'n_hid_layer': 1,
-        'n_hid_dim': 64,
+        'n_couple_layer': 4,
+        'n_hid_layer': 4,
+        'n_hid_dim': 256,
         'name': 'NVP'
     }
     finetune = False
 
-    batch_size = 256
+    batch_size = 512
     train_epochs = 1000
     patience = 100
 
@@ -281,25 +283,28 @@ if __name__ == '__main__':
         else:
             datasets[key].apply(ReshapeYTransform())
 
-    x_dim = (np.reshape(datasets['train'][0].x, -1).shape[-1] + np.reshape(datasets['train'][0].a, -1).shape[-1]) * d_model  # 120 * d_model
+    x_dim = (np.reshape(datasets['train'][0].x, -1).shape[-1] + np.reshape(datasets['train'][0].a, -1).shape[
+        -1]) * d_model  # 120 * d_model
     y_dim = 1  # 1
     z_dim = x_dim - y_dim  # 479
 
-    #x_train, y_train = to_NVP_data(datasets['train'], z_dim, args.train_sample_amount)
-    x_train, y_train = to_NVP_data(datasets['train'], z_dim, -1)
+    # x_train, y_train = to_NVP_data(datasets['train'], z_dim, args.train_sample_amount)
+    x_train, y_train = to_NVP_data(datasets['train'], z_dim, -1, repeat=repeat)
     x_valid, y_valid = to_NVP_data(datasets['valid'], z_dim, -1)
-
+    #x_test, y_test = to_NVP_data(datasets['test'], z_dim, -1)
 
     pretrained_model = TransformerAutoencoderNVP(num_layers=num_layers, d_model=d_model, num_heads=num_heads,
-                                      dff=dff, input_size=x_train.shape[-1], num_ops=num_ops, num_nodes=num_nodes,
-                                      num_adjs=num_adjs, nvp_config=nvp_config, dropout_rate=dropout_rate)
+                                                 dff=dff, input_size=x_train.shape[-1], num_ops=num_ops,
+                                                 num_nodes=num_nodes,
+                                                 num_adjs=num_adjs, nvp_config=nvp_config, dropout_rate=dropout_rate)
     pretrained_model.build(input_shape=(1, 120))
 
     nvp_config = {
         'n_couple_layer': 4,
         'n_hid_layer': 4,
         'n_hid_dim': 256,
-        'name': 'NVP'
+        'name': 'NVP',
+        'use_bias': True
     }
 
     model = TransformerAutoencoderNVP(num_layers=num_layers, d_model=d_model, num_heads=num_heads,
@@ -309,11 +314,12 @@ if __name__ == '__main__':
     model.summary(print_fn=logger.info)
 
     loader = {'train': tf.data.Dataset.from_tensor_slices((x_train, y_train)).shuffle(1024).batch(batch_size=batch_size).repeat(),
-              'valid': tf.data.Dataset.from_tensor_slices((x_valid, y_valid)).batch(batch_size=256)}
-
+              'valid': tf.data.Dataset.from_tensor_slices((x_valid, y_valid)).batch(batch_size=256),
+              #'test': tf.data.Dataset.from_tensor_slices((x_test, y_test)).batch(batch_size=256)
+              }
 
     tensorboard_callback = tf.keras.callbacks.TensorBoard(logdir, histogram_freq=1)
-    steps_per_epoch = len(datasets['train']) // batch_size
+    steps_per_epoch = x_train.shape[0] // batch_size
 
     if train_phase[0]:
         logger.info('Train phase 1')
@@ -321,24 +327,21 @@ if __name__ == '__main__':
                      tensorboard_callback,
                      EarlyStopping(monitor='val_rec_loss', patience=20, restore_best_weights=True)]
         trainer = train(1, model, loader, batch_size, train_epochs, steps_per_epoch, callbacks)
-        results = trainer.evaluate(loader['valid'], batch_size=256)
+        results = trainer.evaluate(loader['test'], batch_size=256)
         logger.info(f'{results}')
     else:
         pretrained_model.load_weights(pretrained_phase1_weight)
         model.encoder.set_weights(pretrained_model.encoder.get_weights())
         model.decoder.set_weights(pretrained_model.decoder.get_weights())
 
-
     if train_phase[1]:
         logger.info('Train phase 2')
         callbacks = [CSVLogger(os.path.join(logdir, f"learning_curve_phase2.log")),
                      tensorboard_callback,
                      EarlyStopping(monitor='val_total_loss', patience=patience, restore_best_weights=True)]
-        train(2, model, loader, batch_size, train_epochs, steps_per_epoch, callbacks,
-              x_dim=x_dim, y_dim=y_dim, z_dim=z_dim, finetune=finetune)
+        trainer = train(2, model, loader, batch_size, train_epochs, steps_per_epoch, callbacks,
+                        x_dim=x_dim, y_dim=y_dim, z_dim=z_dim, finetune=finetune)
+        results = trainer.evaluate(loader['valid'], batch_size=256)
+        logger.info(f'{results}')
     else:
         exit()
-
-
-    # For testing inverse
-    print(inverse_from_acc(model, num_sample_z=50, z_dim=z_dim, to_inv_acc=[[1.0]]))
