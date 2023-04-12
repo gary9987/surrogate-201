@@ -11,6 +11,8 @@ from datasets.nb201_dataset import NasBench201Dataset
 from datasets.utils import train_valid_test_split_dataset
 from spektral.data import BatchLoader
 
+from utils.tf_utils import SaveModelCallback
+
 now_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 logdir = os.path.join("logs", now_time)
 os.makedirs(logdir, exist_ok=True)
@@ -231,7 +233,7 @@ class Trainer2(tf.keras.Model):
                 'rev_loss': rev_loss}
 
 
-def train(phase: int, model, loader, batch_size, train_epochs, steps_per_epoch, callbacks=None, x_dim=None, y_dim=None,
+def train(phase: int, model, loader, train_epochs, callbacks=None, x_dim=None, y_dim=None,
           z_dim=None, finetune=False):
     optimizer = tf.keras.optimizers.Adam(CustomSchedule(d_model), beta_1=0.9, beta_2=0.98, epsilon=1e-9)
     if phase == 1:
@@ -240,16 +242,15 @@ def train(phase: int, model, loader, batch_size, train_epochs, steps_per_epoch, 
         trainer = Trainer2(model, x_dim, y_dim, z_dim, finetune)
 
     try:
-        kw = {'validation_steps': loader['valid'].steps_per_epoch}
+        kw = {'validation_steps': loader['valid'].steps_per_epoch,
+              'steps_per_epoch': loader['train'].steps_per_epoch}
     except:
         kw = {}
 
     trainer.compile(optimizer=optimizer, run_eagerly=True)
     trainer.fit(loader['train'].load(),
                 validation_data=loader['valid'].load(),
-                batch_size=batch_size,
                 epochs=train_epochs,
-                steps_per_epoch=steps_per_epoch,
                 callbacks=callbacks,
                 **kw)
     model.save_weights(os.path.join(logdir, f'modelGAE_weights_phase{phase}'))
@@ -261,7 +262,7 @@ if __name__ == '__main__':
     label_epochs = 200
 
     train_phase = [0, 1]  # 0 not train, 1 train
-    pretrained_phase1_weight = 'logs/20230412-110343_GAE_ok/modelGAE_weights_phase1'
+    pretrained_phase1_weight = 'logs/20230412-174307_GAE_p1_d14/modelGAE_weights_phase1'
 
     #repeat = 1
     eps_scale = 0.05
@@ -271,9 +272,8 @@ if __name__ == '__main__':
     num_layers = 3
     num_heads = 3
     finetune = False
-    latent_dim = 16
+    latent_dim = 14
 
-    batch_size = 64
     train_epochs = 1000
     patience = 100
 
@@ -282,9 +282,6 @@ if __name__ == '__main__':
                                               ratio=[0.8, 0.1, 0.1],
                                               shuffle=True,
                                               shuffle_seed=0)
-
-    datasets['train'] = datasets['train'][:args.train_sample_amount]
-    datasets['valid'] = datasets['valid'][:args.valid_sample_amount]
 
     for key in datasets:
         if is_only_validation_data:
@@ -299,9 +296,9 @@ if __name__ == '__main__':
     z_dim = x_dim - y_dim  # 15
 
     pretrained_model = GraphAutoencoder(latent_dim=latent_dim, num_layers=num_layers,
-                                         d_model=d_model, num_heads=num_heads,
-                                         dff=dff, num_ops=num_ops, num_nodes=num_nodes,
-                                         num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=eps_scale)
+                             d_model=d_model, num_heads=num_heads,
+                             dff=dff, num_ops=num_ops, num_nodes=num_nodes,
+                             num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=eps_scale)
     pretrained_model((tf.random.normal(shape=(1, num_nodes, num_ops)), tf.random.normal(shape=(1, num_nodes, num_nodes))))
 
     nvp_config = {
@@ -310,49 +307,52 @@ if __name__ == '__main__':
         'n_hid_dim': 256,
         'name': 'NVP'
     }
+
     model = GraphAutoencoderNVP(nvp_config=nvp_config, latent_dim=latent_dim, num_layers=num_layers,
                                 d_model=d_model, num_heads=num_heads,
                                 dff=dff, num_ops=num_ops, num_nodes=num_nodes,
                                 num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=0.0)
-
     model((tf.random.normal(shape=(1, num_nodes, num_ops)), tf.random.normal(shape=(1, num_nodes, num_nodes))))
     model.summary(print_fn=logger.info)
 
-    loader = {'train': BatchLoader(datasets['train'], batch_size=batch_size, shuffle=True, epochs=train_epochs),
-              'valid': BatchLoader(datasets['valid'], batch_size=batch_size, shuffle=False, epochs=train_epochs),
-              'test': BatchLoader(datasets['test'], batch_size=batch_size, shuffle=False, epochs=1)}
+
 
     tensorboard_callback = tf.keras.callbacks.TensorBoard(logdir, histogram_freq=1)
 
     if train_phase[0]:
         logger.info('Train phase 1')
-
-
-        class SaveModelCallback(tf.keras.callbacks.Callback):
-            def on_epoch_end(self, epoch, logs=None):
-                if (epoch + 1) % 50 == 0:
-                    self.model.save_weights(os.path.join(logdir, 'model_{:04d}.ckpt'.format(epoch + 1)))
-
+        batch_size = 256
+        loader = {'train': BatchLoader(datasets['train'], batch_size=batch_size, shuffle=True, epochs=train_epochs),
+                  'valid': BatchLoader(datasets['valid'], batch_size=batch_size, shuffle=False, epochs=train_epochs),
+                  'test': BatchLoader(datasets['test'], batch_size=batch_size, shuffle=False, epochs=1)}
         callbacks = [CSVLogger(os.path.join(logdir, "learning_curve_phase1.log")),
-                     SaveModelCallback(),
+                     SaveModelCallback(save_dir=logdir, every_epoch=50),
                      tensorboard_callback,
                      EarlyStopping(monitor='val_rec_loss', patience=patience, restore_best_weights=True)]
-        trainer = train(1, model, loader, batch_size, train_epochs, loader['train'].steps_per_epoch, callbacks)
-        results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch, batch_size=256)
+        trainer = train(1, pretrained_model, loader, train_epochs, callbacks)
+        results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
         logger.info(f'{results}')
-    else:
-        pretrained_model.load_weights(pretrained_phase1_weight)
-        model.encoder.set_weights(pretrained_model.encoder.get_weights())
-        model.decoder.set_weights(pretrained_model.decoder.get_weights())
+
+    # Load AE weights from pretrained model
+    pretrained_model.load_weights(pretrained_phase1_weight)
+    model.encoder.set_weights(pretrained_model.encoder.get_weights())
+    model.decoder.set_weights(pretrained_model.decoder.get_weights())
 
     if train_phase[1]:
+        batch_size = 32
         logger.info('Train phase 2')
+        datasets['train'] = datasets['train'][:args.train_sample_amount]
+        datasets['valid'] = datasets['valid'][:args.valid_sample_amount]
+        loader = {'train': BatchLoader(datasets['train'], batch_size=batch_size, shuffle=True, epochs=train_epochs),
+                  'valid': BatchLoader(datasets['valid'], batch_size=batch_size, shuffle=False, epochs=train_epochs),
+                  'test': BatchLoader(datasets['test'], batch_size=batch_size, shuffle=False, epochs=1)}
+
         callbacks = [CSVLogger(os.path.join(logdir, f"learning_curve_phase2.log")),
                      tensorboard_callback,
                      EarlyStopping(monitor='val_total_loss', patience=patience, restore_best_weights=True)]
-        trainer = train(2, model, loader, batch_size, train_epochs, loader['train'].steps_per_epoch, callbacks,
+        trainer = train(2, model, loader, train_epochs, callbacks,
                         x_dim=x_dim, y_dim=y_dim, z_dim=z_dim, finetune=finetune)
-        results = trainer.evaluate(loader['test'], batch_size=256)
+        results = trainer.evaluate(loader['test'], steps=loader['test'].steps_per_epoch)
         logger.info(f'{results}')
     else:
         exit()
