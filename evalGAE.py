@@ -26,7 +26,7 @@ def inverse_from_acc(model: tf.keras.Model, num_sample_z: int, z_dim: int, to_in
     batch_size = int(tf.shape(to_inv_acc)[0])
     y = tf.repeat(to_inv_acc, num_sample_z, axis=0)  # (batch_size * num_sample_z, 1)
 
-    z = np.random.multivariate_normal([1.] * z_dim, np.eye(z_dim),
+    z = np.random.multivariate_normal([0.] * z_dim, np.eye(z_dim),
                                       size=batch_size * num_sample_z)  # (num_sample_z, z_dim)
     y = np.concatenate([z, y], axis=-1).astype(np.float32)  # (num_sample_z, z_dim + 1)
 
@@ -71,14 +71,16 @@ if __name__ == '__main__':
                              num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=0.)
 
     # model.load_weights('logs/phase2_model/modelTAE_weights_phase2')
-    model.load_weights('logs/20230412-134355_GAE_phase2/modelGAE_weights_phase2')
+    model.load_weights('logs/20230412-154814_GAE_1000/modelGAE_weights_phase2')
     datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, hp=str(200), seed=777),
                                               ratio=[0.8, 0.1, 0.1],
                                               shuffle=True,
                                               shuffle_seed=0)
 
 
-    #datasets['train'] = datasets['train'][:1000]
+    datasets['train'] = datasets['train'][:1000]
+    datasets['valid'] = datasets['valid'][:100]
+
     for key in datasets:
         datasets[key].apply(OnlyValidAccTransform())
         datasets[key].apply(OnlyFinalAcc())
@@ -119,7 +121,7 @@ if __name__ == '__main__':
     x = []
     y = []
     for _, label_acc in loader:
-        ops_idx_lis, adj_list = inverse_from_acc(model, num_sample_z=5, z_dim=15, to_inv_acc=label_acc[:, -1:])
+        ops_idx_lis, adj_list = inverse_from_acc(model, num_sample_z=15, z_dim=15, to_inv_acc=label_acc[:, -1:])
 
         for ops_idx, adj, query_acc in zip(ops_idx_lis, adj_list, label_acc[:, -1]):
             try:
@@ -180,10 +182,10 @@ if __name__ == '__main__':
     x = []
     y = []
 
-    to_inv_acc = 1.0
+    to_inv_acc = 0.95
     while to_inv_acc >= 0.05:
-        to_inv = tf.repeat(tf.constant([[to_inv_acc]]), 20, axis=0)
-        ops_idx_lis, adj_list = inverse_from_acc(model, num_sample_z=10, z_dim=15, to_inv_acc=to_inv)
+        to_inv = tf.repeat(tf.constant([[to_inv_acc]]), 1, axis=0)
+        ops_idx_lis, adj_list = inverse_from_acc(model, num_sample_z=15, z_dim=15, to_inv_acc=to_inv)
         for ops_idx, adj, query_acc in zip(ops_idx_lis, adj_list, to_inv[:, -1]):
             try:
                 ops = [OPS_by_IDX_201[i] for i in ops_idx]
@@ -210,7 +212,6 @@ if __name__ == '__main__':
             except:
                 print('invalid')
                 invalid += 1
-        break
         to_inv_acc -= 0.005
 
     print('Number of invalid decode', invalid)

@@ -263,7 +263,7 @@ if __name__ == '__main__':
     train_phase = [0, 1]  # 0 not train, 1 train
     pretrained_phase1_weight = 'logs/20230412-110343_GAE_ok/modelGAE_weights_phase1'
 
-    repeat = 1
+    #repeat = 1
     eps_scale = 0.05
     d_model = 32
     dropout_rate = 0.0
@@ -273,7 +273,7 @@ if __name__ == '__main__':
     finetune = False
     latent_dim = 16
 
-    batch_size = 256
+    batch_size = 64
     train_epochs = 1000
     patience = 100
 
@@ -283,8 +283,8 @@ if __name__ == '__main__':
                                               shuffle=True,
                                               shuffle_seed=0)
 
-    # datasets['train'] = datasets['train'][:args.train_sample_amount]
-    # datasets['valid'] = datasets['valid'][:args.valid_sample_amount]
+    datasets['train'] = datasets['train'][:args.train_sample_amount]
+    datasets['valid'] = datasets['valid'][:args.valid_sample_amount]
 
     for key in datasets:
         if is_only_validation_data:
@@ -311,9 +311,9 @@ if __name__ == '__main__':
         'name': 'NVP'
     }
     model = GraphAutoencoderNVP(nvp_config=nvp_config, latent_dim=latent_dim, num_layers=num_layers,
-                                            d_model=d_model, num_heads=num_heads,
-                                            dff=dff, num_ops=num_ops, num_nodes=num_nodes,
-                                            num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=eps_scale)
+                                d_model=d_model, num_heads=num_heads,
+                                dff=dff, num_ops=num_ops, num_nodes=num_nodes,
+                                num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=0.0)
 
     model((tf.random.normal(shape=(1, num_nodes, num_ops)), tf.random.normal(shape=(1, num_nodes, num_nodes))))
     model.summary(print_fn=logger.info)
