@@ -4,6 +4,8 @@ from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Dense
 from spektral.layers import GINConvBatch, GlobalSumPool, GlobalMaxPool, GlobalAvgPool, DiffPool
 import tensorflow as tf
+
+from invertible_neural_networks.flow import NVP
 from models.TransformerAE import Decoder, positional_encoding
 
 
@@ -101,7 +103,7 @@ class TransformerDecoder(Decoder):
 
 
 class GraphAutoencoder(tf.keras.Model):
-    def __init__(self, *, latent_dim, num_layers, d_model, num_heads, dff, num_ops, num_nodes, num_adjs, eps_scale=0.01, dropout_rate=0.0):
+    def __init__(self, latent_dim, num_layers, d_model, num_heads, dff, num_ops, num_nodes, num_adjs, eps_scale=0.01, dropout_rate=0.0):
         super(GraphAutoencoder, self).__init__()
         self.d_model = d_model
         self.num_ops = num_ops
@@ -139,6 +141,22 @@ class GraphAutoencoder(tf.keras.Model):
             ops.append(tf.argmax(ops_cls[i], axis=-1))
         adj = tf.cast(tf.argmax(adj_cls, axis=-1), tf.float32)
         return ops, adj, ops_cls, adj_cls
+
+
+class GraphAutoencoderNVP(GraphAutoencoder):
+    def __init__(self, nvp_config, latent_dim, num_layers, d_model, num_heads, dff, num_ops, num_nodes, num_adjs,
+                 eps_scale=0.01, dropout_rate=0.0):
+        super(GraphAutoencoderNVP, self).__init__(latent_dim, num_layers, d_model, num_heads, dff, num_ops,
+                                                  num_nodes, num_adjs, eps_scale, dropout_rate)
+        self.nvp = NVP(inp_dim=latent_dim, **nvp_config)
+
+    def call(self, inputs):
+        ops_cls, adj_cls, kl_loss, latent_mean = super().call(inputs)
+        reg = self.nvp(latent_mean)
+        return ops_cls, adj_cls, kl_loss, reg, latent_mean
+
+    def inverse(self, z):
+        return self.nvp.inverse(z)
 
 
 def bpr_loss(y_true, y_pred):

@@ -99,9 +99,12 @@ class SelectNoneNanData_NasBench101:
 
 
 class LabelScale_NasBench101:
+    def __init__(self, scale=100):
+        self.scale = scale
+
     def __call__(self, graph):
         if graph.y is not None:
-            graph.y *= 100
+            graph.y *= self.scale
 
         return graph
 
@@ -159,3 +162,9 @@ class RemoveEdgeFeature_NasBench101:
     def __call__(self, graph):
         ret = Graph(x=graph.x, a=graph.a, y=graph.y)
         return ret
+
+class OnlyFinalAcc:
+    def __call__(self, graph):
+        if graph.y is not None:
+            graph = Graph(x=graph.x, a=graph.a, y=graph.y[-1:])
+        return graph

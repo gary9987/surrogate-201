@@ -1,18 +1,15 @@
 import argparse
 from tensorflow.python.keras.callbacks import CSVLogger, EarlyStopping
-from datasets.transformation import ReshapeYTransform, OnlyValidAccTransform
+from datasets.transformation import ReshapeYTransform, OnlyValidAccTransform, OnlyFinalAcc, LabelScale_NasBench101
 from invertible_neural_networks.flow import MSE, MMD_multiscale
-from models.GNN import GraphAutoencoder
+from models.GNN import GraphAutoencoder, GraphAutoencoderNVP
 from models.TransformerAE import TransformerAutoencoderNVP, CustomSchedule
 import tensorflow as tf
 import logging
 import sys, os, datetime
 from datasets.nb201_dataset import NasBench201Dataset
 from datasets.utils import train_valid_test_split_dataset
-import numpy as np
-from datasets.utils import to_NVP_data
 from spektral.data import BatchLoader
-
 
 now_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 logdir = os.path.join("logs", now_time)
@@ -25,16 +22,13 @@ formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(messag
 handler.setFormatter(formatter)
 logger.addHandler(handler)
 
-
 parser = argparse.ArgumentParser(description='train TAE')
 parser.add_argument('--train_sample_amount', type=int, default=1000, help='Number of samples to train (default: 900)')
 parser.add_argument('--valid_sample_amount', type=int, default=100, help='Number of samples to train (default: 100)')
 args = parser.parse_args()
 
-
 random_seed = 0
 tf.random.set_seed(random_seed)
-
 
 num_ops = 7
 num_nodes = 8
@@ -49,6 +43,11 @@ def cal_ops_adj_loss_for_graph(x_batch_train, ops_cls, adj_cls):
     return ops_loss, adj_loss
 
 
+def to_undiredted_adj(adj):
+    undirected_adj = tf.cast(tf.cast(adj, tf.int32) | tf.cast(tf.transpose(adj, perm=[0, 2, 1]), tf.int32), tf.float32)
+    return undirected_adj
+
+
 class Trainer1(tf.keras.Model):
     def __init__(self, model: GraphAutoencoder):
         super(Trainer1, self).__init__()
@@ -59,13 +58,10 @@ class Trainer1(tf.keras.Model):
         self.adj_weight = 1
         self.kl_weight = 0.1
 
-    def to_undiredted_adj(self, adj):
-        undirected_adj = tf.cast(tf.cast(adj, tf.int32) | tf.cast(tf.transpose(adj, perm=[0, 2, 1]), tf.int32), tf.float32)
-        return undirected_adj
 
     def train_step(self, data):
         x_batch_train, _ = data
-        undirected_x_batch_train = (x_batch_train[0], self.to_undiredted_adj(x_batch_train[1]))
+        undirected_x_batch_train = (x_batch_train[0], to_undiredted_adj(x_batch_train[1]))
 
         # Open a GradientTape to record the operations run
         # during the forward pass, which enables auto-differentiation.
@@ -75,9 +71,10 @@ class Trainer1(tf.keras.Model):
             # The operations that the layer applies
             # to its inputs are going to be recorded
             # on the GradientTape.
-            ops_cls, adj_cls, kl_loss, _ = self.model(undirected_x_batch_train, training=True)  # Logits for this minibatch
+            ops_cls, adj_cls, kl_loss, _ = self.model(undirected_x_batch_train,
+                                                      training=True)  # Logits for this minibatch
             ops_loss, adj_loss = cal_ops_adj_loss_for_graph(x_batch_train, ops_cls, adj_cls)
-            rec_loss = self.ops_weight * ops_loss + self.adj_weight * adj_loss +  self.kl_weight * kl_loss
+            rec_loss = self.ops_weight * ops_loss + self.adj_weight * adj_loss + self.kl_weight * kl_loss
 
         grads = tape.gradient(rec_loss, self.model.trainable_weights)
         self.optimizer.apply_gradients(zip(grads, self.model.trainable_weights))
@@ -86,10 +83,10 @@ class Trainer1(tf.keras.Model):
 
     def test_step(self, data):
         x_batch_train, _ = data
-        undirected_x_batch_train = (x_batch_train[0], self.to_undiredted_adj(x_batch_train[1]))
+        undirected_x_batch_train = (x_batch_train[0], to_undiredted_adj(x_batch_train[1]))
         ops_cls, adj_cls, kl_loss, _ = self.model(undirected_x_batch_train, training=True)  # Logits for this minibatch
         ops_loss, adj_loss = cal_ops_adj_loss_for_graph(x_batch_train, ops_cls, adj_cls)
-        rec_loss = self.ops_weight * ops_loss + self.adj_weight * adj_loss +  self.kl_weight * kl_loss
+        rec_loss = self.ops_weight * ops_loss + self.adj_weight * adj_loss + self.kl_weight * kl_loss
         return {'rec_loss': rec_loss, 'ops_loss': ops_loss, 'adj_loss': adj_loss, 'kl_loss': kl_loss}
 
 
@@ -121,8 +118,9 @@ class Trainer2(tf.keras.Model):
             self.model.decoder.trainable = False
 
         x_batch_train, y_batch_train = data
+        undirected_x_batch_train = (x_batch_train[0], to_undiredted_adj(x_batch_train[1]))
         y = y_batch_train[:, -y_dim:]
-        z = y_batch_train[:, :z_dim]
+        z = tf.random.normal([tf.shape(y_batch_train)[0], z_dim])
         y_short = tf.concat([z, y], axis=-1)
         non_nan_idx = tf.reshape(tf.where(~tf.math.is_nan(tf.reduce_sum(y_batch_train, axis=-1))), -1)
 
@@ -134,14 +132,16 @@ class Trainer2(tf.keras.Model):
             # The operations that the layer applies
             # to its inputs are going to be recorded
             # on the GradientTape.
-            ops_cls, adj_cls, kl_loss, y_out, x_encoding = self.model(x_batch_train, training=True)  # Logits for this minibatch
+            ops_cls, adj_cls, kl_loss, y_out, x_encoding = self.model(undirected_x_batch_train,
+                                                                      training=True)  # Logits for this minibatch
 
             # To avoid nan loss when batch size is small
             if tf.shape(non_nan_idx)[0] != 0:
-                reg_loss = self.reg_loss_fn(tf.gather(y_batch_train[:, z_dim:], non_nan_idx),
+                reg_loss = self.reg_loss_fn(tf.gather(y, non_nan_idx),
                                             tf.gather(y_out[:, z_dim:], non_nan_idx))
                 latent_loss = self.loss_latent(tf.gather(y_short, non_nan_idx),
-                                               tf.gather(tf.concat([y_out[:, :z_dim], y_out[:, -y_dim:]], axis=-1), non_nan_idx))  # * x_batch_train.shape[0]
+                                               tf.gather(tf.concat([y_out[:, :z_dim], y_out[:, -y_dim:]], axis=-1),
+                                                         non_nan_idx))  # * x_batch_train.shape[0]
             else:
                 reg_loss = 0.
                 latent_loss = 0.
@@ -149,7 +149,7 @@ class Trainer2(tf.keras.Model):
             forward_loss = self.w1 * reg_loss + self.w2 * latent_loss
 
             if self.finetune:
-                ops_loss, adj_loss = cal_ops_adj_loss(x_batch_train, ops_cls, adj_cls)
+                ops_loss, adj_loss = cal_ops_adj_loss_for_graph(x_batch_train, ops_cls, adj_cls)
                 rec_loss = ops_loss + adj_loss + kl_loss
                 forward_loss += self.w0 * rec_loss
 
@@ -168,7 +168,8 @@ class Trainer2(tf.keras.Model):
         # To avoid nan loss when batch size is small
         if tf.shape(non_nan_idx)[0] == 0:
             if self.finetune:
-                return {'total_loss': forward_loss, 'reg_loss': reg_loss, 'latent_loss': latent_loss, 'rev_loss': 0, 'rec_loss': rec_loss}
+                return {'total_loss': forward_loss, 'reg_loss': reg_loss, 'latent_loss': latent_loss, 'rev_loss': 0,
+                        'rec_loss': rec_loss}
             return {'total_loss': forward_loss, 'reg_loss': reg_loss, 'latent_loss': latent_loss, 'rev_loss': 0}
 
         # Backward loss
@@ -178,7 +179,7 @@ class Trainer2(tf.keras.Model):
             y = tf.gather(y, non_nan_idx)
             z = tf.gather(z, non_nan_idx)
             y = y + 0.0001 * tf.random.normal(shape=y.shape)
-            _, _, _, _, x_encoding = self.model(x_batch_train, training=True)  # Logits for this minibatch
+            _, _, _, _, x_encoding = self.model(undirected_x_batch_train, training=True)  # Logits for this minibatch
             x_rev = self.model.inverse(tf.concat([z, y], axis=-1))
             rev_loss = self.loss_backward(x_rev, tf.gather(x_encoding, non_nan_idx))  # * x_batch_train.shape[0]
             loss = self.w3 * rev_loss
@@ -198,24 +199,25 @@ class Trainer2(tf.keras.Model):
         return {'total_loss': forward_loss + loss,
                 'reg_loss': reg_loss,
                 'latent_loss': latent_loss,
-                'rev_loss': rev_loss
-                }
+                'rev_loss': rev_loss}
 
     def test_step(self, data):
         x_batch_train, y_batch_train = data
+        undirected_x_batch_train = (x_batch_train[0], to_undiredted_adj(x_batch_train[1]))
         y = y_batch_train[:, -y_dim:]
-        z = y_batch_train[:, :z_dim]
-        z_rand = tf.random.normal(shape=tf.shape(z))
+        z = tf.random.normal(shape=[tf.shape(y_batch_train)[0], z_dim])
         y_short = tf.concat([z, y], axis=-1)
 
-        ops_cls, adj_cls, kl_loss, y_out, x_encoding = self.model(x_batch_train, training=False)  # Logits for this minibatch
+        ops_cls, adj_cls, kl_loss, y_out, x_encoding = self.model(undirected_x_batch_train,
+                                                                  training=False)  # Logits for this minibatch
 
-        reg_loss = self.reg_loss_fn(y_batch_train[:, z_dim:], y_out[:, z_dim:])
-        latent_loss = self.loss_latent(y_short, tf.concat([y_out[:, :z_dim], y_out[:, -y_dim:]], axis=-1))  # * x_batch_train.shape[0]
-        x_rev = self.model.inverse(y_batch_train)
+        reg_loss = self.reg_loss_fn(y, y_out[:, z_dim:])
+        latent_loss = self.loss_latent(y_short, tf.concat([y_out[:, :z_dim], y_out[:, -y_dim:]],
+                                                          axis=-1))  # * x_batch_train.shape[0]
+        x_rev = self.model.inverse(y_short)
         rev_loss = self.loss_backward(x_rev, x_encoding)  # * x_batch_train.shape[0]
         if self.finetune:
-            ops_loss, adj_loss = cal_ops_adj_loss(x_batch_train, ops_cls, adj_cls)
+            ops_loss, adj_loss = cal_ops_adj_loss_for_graph(x_batch_train, ops_cls, adj_cls)
             rec_loss = ops_loss + adj_loss + kl_loss
             return {'total_loss': self.w1 * reg_loss + self.w2 * latent_loss + self.w3 * rev_loss + self.w0 * rec_loss,
                     'reg_loss': reg_loss,
@@ -229,7 +231,8 @@ class Trainer2(tf.keras.Model):
                 'rev_loss': rev_loss}
 
 
-def train(phase: int, model, loader, batch_size, train_epochs, steps_per_epoch, callbacks=None, x_dim=None, y_dim=None, z_dim=None, finetune=False):
+def train(phase: int, model, loader, batch_size, train_epochs, steps_per_epoch, callbacks=None, x_dim=None, y_dim=None,
+          z_dim=None, finetune=False):
     optimizer = tf.keras.optimizers.Adam(CustomSchedule(d_model), beta_1=0.9, beta_2=0.98, epsilon=1e-9)
     if phase == 1:
         trainer = Trainer1(model)
@@ -257,10 +260,11 @@ if __name__ == '__main__':
     is_only_validation_data = True
     label_epochs = 200
 
-    train_phase = [1, 0]  # 0 not train, 1 train
+    train_phase = [0, 1]  # 0 not train, 1 train
+    pretrained_phase1_weight = 'logs/20230412-110343_GAE_ok/modelGAE_weights_phase1'
 
     repeat = 1
-    eps_scale = 0.1
+    eps_scale = 0.05
     d_model = 32
     dropout_rate = 0.0
     dff = 256
@@ -268,6 +272,7 @@ if __name__ == '__main__':
     num_heads = 3
     finetune = False
     latent_dim = 16
+
     batch_size = 256
     train_epochs = 1000
     patience = 100
@@ -278,55 +283,58 @@ if __name__ == '__main__':
                                               shuffle=True,
                                               shuffle_seed=0)
 
-    #datasets['train'] = datasets['train'][:args.train_sample_amount]
-    #datasets['valid'] = datasets['valid'][:args.valid_sample_amount]
+    # datasets['train'] = datasets['train'][:args.train_sample_amount]
+    # datasets['valid'] = datasets['valid'][:args.valid_sample_amount]
 
     for key in datasets:
         if is_only_validation_data:
             datasets[key].apply(OnlyValidAccTransform())
+            datasets[key].apply(OnlyFinalAcc())
+            datasets[key].apply(LabelScale_NasBench101(scale=0.01))
         else:
             datasets[key].apply(ReshapeYTransform())
 
-    x_dim = (np.reshape(datasets['train'][0].x, -1).shape[-1] + np.reshape(datasets['train'][0].a, -1).shape[-1]) * d_model  # 120 * d_model
+    x_dim = latent_dim
     y_dim = 1  # 1
-    z_dim = x_dim - y_dim  # 479
+    z_dim = x_dim - y_dim  # 15
 
-    #x_train, y_train = to_NVP_data(datasets['train'], z_dim, args.train_sample_amount)
-    #x_train, y_train = to_NVP_data(datasets['train'], z_dim, -1, repeat=repeat)
-    #x_valid, y_valid = to_NVP_data(datasets['valid'], z_dim, -1, repeat=repeat)
-    #x_test, y_test = to_NVP_data(datasets['test'], z_dim, -1)
+    pretrained_model = GraphAutoencoder(latent_dim=latent_dim, num_layers=num_layers,
+                                         d_model=d_model, num_heads=num_heads,
+                                         dff=dff, num_ops=num_ops, num_nodes=num_nodes,
+                                         num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=eps_scale)
+    pretrained_model((tf.random.normal(shape=(1, num_nodes, num_ops)), tf.random.normal(shape=(1, num_nodes, num_nodes))))
 
+    nvp_config = {
+        'n_couple_layer': 4,
+        'n_hid_layer': 4,
+        'n_hid_dim': 256,
+        'name': 'NVP'
+    }
+    model = GraphAutoencoderNVP(nvp_config=nvp_config, latent_dim=latent_dim, num_layers=num_layers,
+                                            d_model=d_model, num_heads=num_heads,
+                                            dff=dff, num_ops=num_ops, num_nodes=num_nodes,
+                                            num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=eps_scale)
 
-    model = GraphAutoencoder(latent_dim=latent_dim, num_layers=num_layers,
-                             d_model=d_model, num_heads=num_heads,
-                             dff=dff, num_ops=num_ops, num_nodes=num_nodes,
-                             num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=eps_scale)
-    #pretrained_model.build(input_shape=(1, 120))
-    
-    #model = TransformerAutoencoderNVP(num_layers=num_layers, d_model=d_model, num_heads=num_heads,
-    #                                  dff=dff, input_size=x_train.shape[-1], num_ops=num_ops, num_nodes=num_nodes,
-    #                                  num_adjs=num_adjs, nvp_config=nvp_config, dropout_rate=dropout_rate)
-    
     model((tf.random.normal(shape=(1, num_nodes, num_ops)), tf.random.normal(shape=(1, num_nodes, num_nodes))))
     model.summary(print_fn=logger.info)
-
 
     loader = {'train': BatchLoader(datasets['train'], batch_size=batch_size, shuffle=True, epochs=train_epochs),
               'valid': BatchLoader(datasets['valid'], batch_size=batch_size, shuffle=False, epochs=train_epochs),
               'test': BatchLoader(datasets['test'], batch_size=batch_size, shuffle=False, epochs=1)}
 
-
     tensorboard_callback = tf.keras.callbacks.TensorBoard(logdir, histogram_freq=1)
-    #steps_per_epoch = x_train.shape[0] // batch_size
 
     if train_phase[0]:
         logger.info('Train phase 1')
+
+
         class SaveModelCallback(tf.keras.callbacks.Callback):
             def on_epoch_end(self, epoch, logs=None):
                 if (epoch + 1) % 50 == 0:
                     self.model.save_weights(os.path.join(logdir, 'model_{:04d}.ckpt'.format(epoch + 1)))
 
         callbacks = [CSVLogger(os.path.join(logdir, "learning_curve_phase1.log")),
+                     SaveModelCallback(),
                      tensorboard_callback,
                      EarlyStopping(monitor='val_rec_loss', patience=patience, restore_best_weights=True)]
         trainer = train(1, model, loader, batch_size, train_epochs, loader['train'].steps_per_epoch, callbacks)
@@ -337,15 +345,14 @@ if __name__ == '__main__':
         model.encoder.set_weights(pretrained_model.encoder.get_weights())
         model.decoder.set_weights(pretrained_model.decoder.get_weights())
 
-
     if train_phase[1]:
         logger.info('Train phase 2')
         callbacks = [CSVLogger(os.path.join(logdir, f"learning_curve_phase2.log")),
                      tensorboard_callback,
                      EarlyStopping(monitor='val_total_loss', patience=patience, restore_best_weights=True)]
-        trainer = train(2, model, loader, batch_size, train_epochs, steps_per_epoch, callbacks,
-              x_dim=x_dim, y_dim=y_dim, z_dim=z_dim, finetune=finetune)
+        trainer = train(2, model, loader, batch_size, train_epochs, loader['train'].steps_per_epoch, callbacks,
+                        x_dim=x_dim, y_dim=y_dim, z_dim=z_dim, finetune=finetune)
         results = trainer.evaluate(loader['test'], batch_size=256)
-        logger.info(f'{results}')      
+        logger.info(f'{results}')
     else:
         exit()
