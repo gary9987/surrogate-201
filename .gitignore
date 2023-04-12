@@ -1,4 +1,7 @@
 .idea
+logs
+NasBench201Dataset
+NasBench201Dataset.zip
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
