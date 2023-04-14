@@ -148,10 +148,15 @@ class GraphAutoencoderNVP(GraphAutoencoder):
                  eps_scale=0.01, dropout_rate=0.0):
         super(GraphAutoencoderNVP, self).__init__(latent_dim, num_layers, d_model, num_heads, dff, num_ops,
                                                   num_nodes, num_adjs, eps_scale, dropout_rate)
-        self.nvp = NVP(inp_dim=latent_dim, **nvp_config)
+        if nvp_config['inp_dim'] is None:
+            nvp_config['inp_dim'] = latent_dim
+
+        self.pad_dim = nvp_config['inp_dim'] - latent_dim
+        self.nvp = NVP(**nvp_config)
 
     def call(self, inputs):
         ops_cls, adj_cls, kl_loss, latent_mean = super().call(inputs)
+        latent_mean = tf.concat([latent_mean, tf.zeros((tf.shape(latent_mean)[0], self.pad_dim))], axis=-1)
         reg = self.nvp(latent_mean)
         return ops_cls, adj_cls, kl_loss, reg, latent_mean
 

@@ -121,8 +121,8 @@ class Trainer2(tf.keras.Model):
 
         x_batch_train, y_batch_train = data
         undirected_x_batch_train = (x_batch_train[0], to_undiredted_adj(x_batch_train[1]))
-        y = y_batch_train[:, -y_dim:]
-        z = tf.random.normal([tf.shape(y_batch_train)[0], z_dim])
+        y = y_batch_train[:, -self.y_dim:]
+        z = tf.random.normal([tf.shape(y_batch_train)[0], self.z_dim])
         y_short = tf.concat([z, y], axis=-1)
         non_nan_idx = tf.reshape(tf.where(~tf.math.is_nan(tf.reduce_sum(y_batch_train, axis=-1))), -1)
 
@@ -140,9 +140,9 @@ class Trainer2(tf.keras.Model):
             # To avoid nan loss when batch size is small
             if tf.shape(non_nan_idx)[0] != 0:
                 reg_loss = self.reg_loss_fn(tf.gather(y, non_nan_idx),
-                                            tf.gather(y_out[:, z_dim:], non_nan_idx))
+                                            tf.gather(y_out[:, self.z_dim:], non_nan_idx))
                 latent_loss = self.loss_latent(tf.gather(y_short, non_nan_idx),
-                                               tf.gather(tf.concat([y_out[:, :z_dim], y_out[:, -y_dim:]], axis=-1),
+                                               tf.gather(tf.concat([y_out[:, :self.z_dim], y_out[:, -self.y_dim:]], axis=-1),
                                                          non_nan_idx))  # * x_batch_train.shape[0]
             else:
                 reg_loss = 0.
@@ -206,15 +206,15 @@ class Trainer2(tf.keras.Model):
     def test_step(self, data):
         x_batch_train, y_batch_train = data
         undirected_x_batch_train = (x_batch_train[0], to_undiredted_adj(x_batch_train[1]))
-        y = y_batch_train[:, -y_dim:]
-        z = tf.random.normal(shape=[tf.shape(y_batch_train)[0], z_dim])
+        y = y_batch_train[:, -self.y_dim:]
+        z = tf.random.normal(shape=[tf.shape(y_batch_train)[0], self.z_dim])
         y_short = tf.concat([z, y], axis=-1)
 
         ops_cls, adj_cls, kl_loss, y_out, x_encoding = self.model(undirected_x_batch_train,
                                                                   training=False)  # Logits for this minibatch
 
-        reg_loss = self.reg_loss_fn(y, y_out[:, z_dim:])
-        latent_loss = self.loss_latent(y_short, tf.concat([y_out[:, :z_dim], y_out[:, -y_dim:]],
+        reg_loss = self.reg_loss_fn(y, y_out[:, self.z_dim:])
+        latent_loss = self.loss_latent(y_short, tf.concat([y_out[:, :self.z_dim], y_out[:, -self.y_dim:]],
                                                           axis=-1))  # * x_batch_train.shape[0]
         x_rev = self.model.inverse(y_short)
         rev_loss = self.loss_backward(x_rev, x_encoding)  # * x_batch_train.shape[0]
@@ -293,7 +293,9 @@ if __name__ == '__main__':
 
     x_dim = latent_dim
     y_dim = 1  # 1
-    z_dim = x_dim - y_dim  # 15
+    z_dim = latent_dim * 2 - 1  # 27
+    tot_dim = y_dim + z_dim  # 28
+    pad_dim = tot_dim - x_dim  # 14
 
     pretrained_model = GraphAutoencoder(latent_dim=latent_dim, num_layers=num_layers,
                              d_model=d_model, num_heads=num_heads,
@@ -305,7 +307,8 @@ if __name__ == '__main__':
         'n_couple_layer': 4,
         'n_hid_layer': 4,
         'n_hid_dim': 256,
-        'name': 'NVP'
+        'name': 'NVP',
+        'inp_dim': tot_dim
     }
 
     model = GraphAutoencoderNVP(nvp_config=nvp_config, latent_dim=latent_dim, num_layers=num_layers,
@@ -314,8 +317,6 @@ if __name__ == '__main__':
                                 num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=0.0)
     model((tf.random.normal(shape=(1, num_nodes, num_ops)), tf.random.normal(shape=(1, num_nodes, num_nodes))))
     model.summary(print_fn=logger.info)
-
-
 
     tensorboard_callback = tf.keras.callbacks.TensorBoard(logdir, histogram_freq=1)
 
@@ -332,17 +333,27 @@ if __name__ == '__main__':
         trainer = train(1, pretrained_model, loader, train_epochs, callbacks)
         results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
         logger.info(f'{results}')
+    else:
+        pretrained_model.load_weights(pretrained_phase1_weight)
 
     # Load AE weights from pretrained model
-    pretrained_model.load_weights(pretrained_phase1_weight)
     model.encoder.set_weights(pretrained_model.encoder.get_weights())
     model.decoder.set_weights(pretrained_model.decoder.get_weights())
 
     if train_phase[1]:
-        batch_size = 32
+        batch_size = 256
         logger.info('Train phase 2')
-        datasets['train'] = datasets['train'][:args.train_sample_amount]
-        datasets['valid'] = datasets['valid'][:args.valid_sample_amount]
+
+        tmp_train = datasets['train'][:args.train_sample_amount]
+        tmp_valid = datasets['valid'][:args.valid_sample_amount]
+        datasets['train'] = tmp_train
+        datasets['valid'] = tmp_valid
+        for i in range(20):
+            datasets['train'] += tmp_train
+            datasets['valid'] += tmp_valid
+
+        #datasets['train'] = datasets['train'][:args.train_sample_amount]
+        #datasets['valid'] = datasets['valid'][:args.valid_sample_amount]
         loader = {'train': BatchLoader(datasets['train'], batch_size=batch_size, shuffle=True, epochs=train_epochs),
                   'valid': BatchLoader(datasets['valid'], batch_size=batch_size, shuffle=False, epochs=train_epochs),
                   'test': BatchLoader(datasets['test'], batch_size=batch_size, shuffle=False, epochs=1)}
