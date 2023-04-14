@@ -53,7 +53,7 @@ def prior_validity(model, loader, n_latent_point, nb201api):
     g_valid = []
     for _ in tqdm(range(n_latent_point)):
         z = tf.random.normal((1, model.latent_dim), dtype=tf.float32)
-        #z = z * z_std + z_mean  # move to train's latent range
+        z = z * z_std + z_mean  # move to train's latent range
         z = tf.repeat(z, decode_times, axis=0)
         #for _ in range(decode_times):
         ops_batch, adj_batch, ops_cls, adj_cls = model.decode(z)
