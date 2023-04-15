@@ -305,7 +305,7 @@ if __name__ == '__main__':
     patience = 100
 
     # 15624
-    datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=1000, hp=str(label_epochs), seed=False),
+    datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, hp=str(label_epochs), seed=False),
                                               ratio=[0.8, 0.1, 0.1],
                                               shuffle=True,
                                               shuffle_seed=0)
@@ -353,7 +353,7 @@ if __name__ == '__main__':
                   'valid': BatchLoader(datasets['valid'], batch_size=batch_size, shuffle=False, epochs=train_epochs),
                   'test': BatchLoader(datasets['test'], batch_size=batch_size, shuffle=False, epochs=1)}
         callbacks = [CSVLogger(os.path.join(logdir, "learning_curve_phase1.csv")),
-                     SaveModelCallback(save_dir=logdir, every_epoch=1),
+                     SaveModelCallback(save_dir=logdir, every_epoch=100),
                      tensorboard_callback,
                      EarlyStopping(monitor='val_rec_loss', patience=patience, restore_best_weights=True)]
         trainer = train(1, pretrained_model, loader, train_epochs, callbacks)
