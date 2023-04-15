@@ -49,7 +49,7 @@ def convert_arch_str_to_martrix_ops(arch_str: str) -> Tuple[np.ndarray, List[str
 
 
 if __name__ == '__main__':
-    output_dir = 'nb201_query_data'
+    output_dir = '../nb201_query_data'
     Path(output_dir).mkdir(exist_ok=True)
 
     hp = '200'  # can be 12 or 200 for cifar-10
@@ -59,7 +59,7 @@ if __name__ == '__main__':
     if hp == '12':
         seed_list = [111, 777]
     elif hp == '200':
-        seed_list = [777, 888] # 999
+        seed_list = [777, 888, False] # 999
 
     for is_random in seed_list:
         # Create the API instance for the topology search space in NATS

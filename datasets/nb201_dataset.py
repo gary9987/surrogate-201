@@ -1,5 +1,6 @@
 import logging
 from pathlib import Path
+from typing import Union
 import spektral.data
 import wget
 from spektral.data import Dataset, Graph
@@ -29,7 +30,7 @@ def convert_matrix_ops_to_graph(matrix, ops):
 
 
 def transform_nb201_to_graph(records: dict, hp: str, seed: int):
-    file_path = f'../NasBench201Dataset_hp{hp}_seed{seed}'
+    file_path = f'../NasBench201Dataset/NasBench201Dataset_hp{hp}_seed{seed}'
     Path(file_path).mkdir(exist_ok=True)
 
     for record, no in zip(records, range(len(records))):
@@ -60,8 +61,16 @@ def transform_nb201_to_graph(records: dict, hp: str, seed: int):
         
 
 class NasBench201Dataset(Dataset):
-    def __init__(self, start: int, end: int, hp: str, seed: int, **kwargs):
-        self.file_path = os.path.join('NasBench201Dataset', f'NasBench201Dataset_hp{hp}_seed{seed}')
+    def __init__(self, start: int, end: int, hp: str, seed: Union[int, bool], root='', **kwargs):
+        """
+        :param start:
+        :param end:
+        :param hp: 12 or 200 to set using 12 or 200 epochs dataset
+        :param seed: if seed is False, will use average of all available trails
+        :param root:
+        :param kwargs:
+        """
+        self.file_path = os.path.join(root, 'NasBench201Dataset', f'NasBench201Dataset_hp{hp}_seed{seed}')
         self.start = start
         self.end = end
         super().__init__(**kwargs)
@@ -101,7 +110,7 @@ if __name__ == '__main__':
     if hp == '12':
         seed_list = [111, 777]
     elif hp == '200':
-        seed_list = [777, 888] # 999
+        seed_list = [777, 888, False] # 999
 
     for seed in seed_list:
         output_dir = '../nb201_query_data'
@@ -111,5 +120,5 @@ if __name__ == '__main__':
 
         print(len(records))  # 15625
         transform_nb201_to_graph(records, hp=hp, seed=seed)
-        datasets = NasBench201Dataset(0, 15624, hp=hp, seed=seed)
+        datasets = NasBench201Dataset(0, 15624, hp=hp, seed=seed, root='../')
         print(datasets)
