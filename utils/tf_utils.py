@@ -10,7 +10,7 @@ class SaveModelCallback(tf.keras.callbacks.Callback):
 
     def on_epoch_end(self, epoch, logs=None):
         if (epoch + 1) % self.every_epoch == 0:
-            self.model.save_weights(os.path.join(self.save_dir, 'model_{:04d}.ckpt'.format(epoch + 1)))
+            self.model.save(os.path.join(self.save_dir, 'model_{:04d}.ckpt'.format(epoch + 1)))
 
 
 def to_undiredted_adj(adj):

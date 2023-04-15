@@ -62,6 +62,7 @@ if __name__ == '__main__':
     y_dim = 1
     tot_dim = y_dim + z_dim  # 28
 
+    plot_on_slit = 'train'  # train, valid, test
 
     nvp_config = {
         'n_couple_layer': 4,
@@ -76,7 +77,7 @@ if __name__ == '__main__':
                                 num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=0.)
 
     # model.load_weights('logs/phase2_model/modelTAE_weights_phase2')
-    model.load_weights('logs/20230414-011142/modelGAE_weights_phase2')
+    model.load_weights('logs/20230415-000904_GAE_opskl_400_seed1/modelGAE_weights_phase2')
     datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, hp=str(200), seed=777),
                                               ratio=[0.8, 0.1, 0.1],
                                               shuffle=True,
@@ -90,14 +91,14 @@ if __name__ == '__main__':
     nb201api = create(None, 'tss', fast_mode=True, verbose=False)
 
     # Eval inverse
-    datasets['train'] = datasets['train'][:1000]
-    datasets['valid'] = datasets['valid'][:100]
+    datasets['train'] = datasets['train'][:350]
+    datasets['valid'] = datasets['valid'][:50]
     x = []
     y = []
     invalid = 0
-    loader = BatchLoader(datasets['train'], batch_size=512, epochs=1)
+    loader = BatchLoader(datasets[plot_on_slit], batch_size=512, epochs=1)
     for _, label_acc in loader:
-        ops_idx_lis, adj_list = inverse_from_acc(model, num_sample_z=15, x_dim=x_dim, z_dim=z_dim, to_inv_acc=label_acc[:, -1:])
+        ops_idx_lis, adj_list = inverse_from_acc(model, num_sample_z=1, x_dim=x_dim, z_dim=z_dim, to_inv_acc=label_acc[:, -1:])
 
         for ops_idx, adj, query_acc in zip(ops_idx_lis, adj_list, label_acc[:, -1]):
             try:
@@ -108,18 +109,12 @@ if __name__ == '__main__':
 
                 arch_idx = nb201api.query_index_by_arch(arch_str)
 
-                accumulate_acc = 0
                 acc_list = [float(query_acc)]
-                for seed in [777, 888]:
-                    data = nb201api.get_more_info(arch_idx, 'cifar10-valid', iepoch=199, hp='200', is_random=seed)
-                    accumulate_acc += data['valid-accuracy'] / 100.
-                    acc_list.append(data['valid-accuracy'] / 100.)
-
-                    # data = nb201api.get_more_info(arch_idx, 'cifar10', iepoch=199, hp='200', is_random=seed)
-                    # print(data['test-accuracy'])
+                data = nb201api.get_more_info(arch_idx, 'cifar10-valid', iepoch=199, hp='200', is_random=False)
+                acc = data['valid-accuracy'] / 100.
 
                 x.append(float(query_acc))
-                y.append(accumulate_acc / 2)
+                y.append(acc)
                 print(acc_list)  # [query_acc, 777_acc, 888_acc]
             except:
                 print('invalid')
@@ -135,7 +130,7 @@ if __name__ == '__main__':
     plt.cla()
 
     # Eval regression
-    loader = BatchLoader(datasets['train'], batch_size=256, epochs=1)
+    loader = BatchLoader(datasets[plot_on_slit], batch_size=256, epochs=1)
     x = []
     y = []
     for arch, label_acc in loader:
@@ -171,29 +166,19 @@ if __name__ == '__main__':
     for ops_idx, adj, query_acc in zip(ops_idx_lis, adj_list, to_inv[:, -1]):
         try:
             ops = [OPS_by_IDX_201[i] for i in ops_idx]
-            print(ops)
-            print(adj)
-
             arch_str = ops_list_to_nb201_arch_str(ops)
             print(arch_str)
 
             idx = nb201api.query_index_by_arch(arch_str)
 
-            acc = 0
-            for seed in [777, 888]:
-                data = nb201api.get_more_info(idx, 'cifar10-valid', iepoch=199, hp='200', is_random=seed)
-                print(data['valid-accuracy'])
-                acc += data['valid-accuracy'] / 100.
-
-                #data = nb201api.get_more_info(idx, 'cifar10', iepoch=199, hp='200', is_random=seed)
-                #print(data['test-accuracy'])
-            acc /= 2
+            data = nb201api.get_more_info(idx, 'cifar10-valid', iepoch=199, hp='200', is_random=False)
+            print(data['valid-accuracy'])
+            acc = data['valid-accuracy'] / 100
             x.append(query_acc)
             y.append(acc)
         except:
             print('invalid')
             invalid += 1
-
 
     print('Number of invalid decode', invalid)
     fig, ax = plt.subplots()
@@ -202,4 +187,39 @@ if __name__ == '__main__':
     plt.xlim(0., 1.)
     plt.ylim(0., 1.)
     plt.savefig('decending.png')
+    plt.cla()
 
+
+    # Eval query 1.0
+    x = []
+    y = []
+    invalid = 0
+    to_inv_acc = 1.0
+    to_inv = tf.repeat(tf.reshape(tf.constant(to_inv_acc), [-1, 1]), 10, axis=0)
+    ops_idx_lis, adj_list = inverse_from_acc(model, num_sample_z=1, x_dim=x_dim, z_dim=z_dim, to_inv_acc=to_inv)
+    for ops_idx, adj, query_acc in zip(ops_idx_lis, adj_list, to_inv[:, -1]):
+        try:
+            ops = [OPS_by_IDX_201[i] for i in ops_idx]
+            arch_str = ops_list_to_nb201_arch_str(ops)
+            print(arch_str)
+
+            idx = nb201api.query_index_by_arch(arch_str)
+
+            # is_random=False will return the avg. result
+            data = nb201api.get_more_info(idx, 'cifar10-valid', iepoch=199, hp='200', is_random=False)
+            print(data['valid-accuracy'])
+            acc = data['valid-accuracy'] / 100
+            x.append(query_acc)
+            y.append(acc)
+        except:
+            print('invalid')
+            invalid += 1
+
+    print('Number of invalid decode', invalid)
+    print('Avg found acc', sum(y) / len(y))
+    fig, ax = plt.subplots()
+    ax.axline((0, 0), slope=1, linewidth=0.2, color='black')
+    plt.scatter(x, y, s=[1] * len(x))
+    plt.xlim(0.85, 1.2)
+    plt.ylim(0.85, 1.2)
+    plt.savefig('top.png')
