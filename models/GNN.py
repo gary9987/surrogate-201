@@ -118,7 +118,7 @@ class GraphAutoencoder(tf.keras.Model):
                                dropout_rate=dropout_rate)
 
     def sample(self, mean, log_var, eps_scale=0.01):
-        eps = tf.random.normal(shape=mean.shape)
+        eps = tf.random.normal(shape=tf.shape(mean))
         return mean + tf.exp(log_var * 0.5) * eps * eps_scale
 
     def call(self, inputs):

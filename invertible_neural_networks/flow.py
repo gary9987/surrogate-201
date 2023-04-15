@@ -216,16 +216,16 @@ def MMD_multiscale(x, y):
     yy = tf.linalg.matmul(y, tf.transpose(y))
     zz = tf.linalg.matmul(x, tf.transpose(y))
 
-    rx = tf.broadcast_to(tf.linalg.diag_part(xx), xx.shape)
-    ry = tf.broadcast_to(tf.linalg.diag_part(yy), yy.shape)
+    rx = tf.broadcast_to(tf.linalg.diag_part(xx), tf.shape(xx))
+    ry = tf.broadcast_to(tf.linalg.diag_part(yy), tf.shape(yy))
 
     dxx = tf.transpose(rx) + rx - 2.*xx
     dyy = tf.transpose(ry) + ry - 2.*yy
     dxy = tf.transpose(rx) + ry - 2.*zz
 
-    XX = tf.zeros(xx.shape, dtype='float32')
-    YY = tf.zeros(xx.shape, dtype='float32')
-    XY = tf.zeros(xx.shape, dtype='float32')
+    XX = tf.zeros(tf.shape(xx), dtype='float32')
+    YY = tf.zeros(tf.shape(xx), dtype='float32')
+    XY = tf.zeros(tf.shape(xx), dtype='float32')
 
     for a in [0.05, 0.2, 0.9]:
         XX += a**2 * 1/(a**2 + dxx)
