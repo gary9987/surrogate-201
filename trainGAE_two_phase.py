@@ -238,9 +238,9 @@ class Trainer2(tf.keras.Model):
         z = tf.random.normal(shape=[tf.shape(y_batch_train)[0], self.z_dim])
 
         ops_cls, adj_cls, kl_loss, y_out, x_encoding = self.model(undirected_x_batch_train, training=False)
-        reg_loss, latent_loss = self.cal_reg_and_latent_loss(y, z, y_out, tf.range(tf.shape(y_batch_train)[0]))
+        reg_loss, latent_loss = self.cal_reg_and_latent_loss(y, z, y_out, tf.zeros(tf.shape(y_batch_train)[0], dtype=tf.int32))
         forward_loss = self.w1 * reg_loss + self.w2 * latent_loss
-        rev_loss = self.cal_rev_loss(undirected_x_batch_train, y, z, tf.range(tf.shape(y_batch_train)[0]), 0.)
+        rev_loss = self.cal_rev_loss(undirected_x_batch_train, y, z, tf.zeros(tf.shape(y_batch_train)[0], dtype=tf.int32), 0.)
         backward_loss = self.w3 * rev_loss
         if self.finetune:
             ops_loss, adj_loss = cal_ops_adj_loss_for_graph(x_batch_train, ops_cls, adj_cls)
