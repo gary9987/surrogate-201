@@ -56,7 +56,7 @@ class Trainer1(tf.keras.Model):
     def __init__(self, model: GraphAutoencoder):
         super(Trainer1, self).__init__()
         self.model = model
-        self.ops_weight = 1
+        self.ops_weight = 10
         self.adj_weight = 1
         self.kl_weight = 0.005
 
@@ -262,7 +262,7 @@ class Trainer2(tf.keras.Model):
 
 def train(phase: int, model, loader, train_epochs, callbacks=None, x_dim=None, y_dim=None,
           z_dim=None, finetune=False):
-    optimizer = tf.keras.optimizers.Adam(CustomSchedule(d_model), beta_1=0.9, beta_2=0.98, epsilon=1e-9)
+    #optimizer = tf.keras.optimizers.Adam(CustomSchedule(d_model), beta_1=0.9, beta_2=0.98, epsilon=1e-9)
     if phase == 1:
         trainer = Trainer1(model)
     elif phase == 2:
@@ -274,7 +274,7 @@ def train(phase: int, model, loader, train_epochs, callbacks=None, x_dim=None, y
     except:
         kw = {}
 
-    trainer.compile(optimizer=optimizer, run_eagerly=False)
+    trainer.compile(optimizer='adam', run_eagerly=False)
     trainer.fit(loader['train'].load(),
                 validation_data=loader['valid'].load(),
                 epochs=train_epochs,
@@ -348,9 +348,9 @@ if __name__ == '__main__':
 
     if train_phase[0]:
         logger.info('Train phase 1')
-        batch_size = 256
-        loader = {'train': BatchLoader(datasets['train'], batch_size=batch_size, shuffle=True, epochs=train_epochs),
-                  'valid': BatchLoader(datasets['valid'], batch_size=batch_size, shuffle=False, epochs=train_epochs),
+        batch_size = 32
+        loader = {'train': BatchLoader(datasets['train'], batch_size=batch_size, shuffle=True, epochs=train_epochs*2),
+                  'valid': BatchLoader(datasets['valid'], batch_size=batch_size, shuffle=False, epochs=train_epochs*2),
                   'test': BatchLoader(datasets['test'], batch_size=batch_size, shuffle=False, epochs=1)}
         callbacks = [CSVLogger(os.path.join(logdir, "learning_curve_phase1.csv")),
                      SaveModelCallback(save_dir=logdir, every_epoch=100),
