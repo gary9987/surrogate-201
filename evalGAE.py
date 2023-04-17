@@ -45,6 +45,42 @@ def inverse_from_acc(model: tf.keras.Model, num_sample_z: int, x_dim: int, z_dim
     return ops_idx_list, adj_list
 
 
+def eval_query_best(model: tf.keras.Model, x_dim: int, z_dim: int):
+    # Eval query 1.0
+    nb201api = create(None, 'tss', fast_mode=True, verbose=False)
+    x = []
+    y = []
+    invalid = 0
+    to_inv_acc = 1.0
+    to_inv = tf.repeat(tf.reshape(tf.constant(to_inv_acc), [-1, 1]), 10, axis=0)
+    ops_idx_lis, adj_list = inverse_from_acc(model, num_sample_z=1, x_dim=x_dim, z_dim=z_dim, to_inv_acc=to_inv)
+    for ops_idx, adj, query_acc in zip(ops_idx_lis, adj_list, to_inv[:, -1]):
+        try:
+            ops = [OPS_by_IDX_201[i] for i in ops_idx]
+            arch_str = ops_list_to_nb201_arch_str(ops)
+            print(arch_str)
+
+            idx = nb201api.query_index_by_arch(arch_str)
+
+            # is_random=False will return the avg. result
+            data = nb201api.get_more_info(idx, 'cifar10-valid', iepoch=199, hp='200', is_random=False)
+            print(data['valid-accuracy'])
+            acc = data['valid-accuracy'] / 100
+            x.append(query_acc)
+            y.append(acc)
+        except:
+            print('invalid')
+            invalid += 1
+
+    fig, ax = plt.subplots()
+    ax.axline((0, 0), slope=1, linewidth=0.2, color='black')
+    plt.scatter(x, y, s=[1] * len(x))
+    plt.xlim(0.85, 1.2)
+    plt.ylim(0.85, 1.2)
+    plt.savefig('top.png')
+    return invalid, sum(y) / len(y), max(y)
+
+
 if __name__ == '__main__':
     num_ops = 7
     num_nodes = 8
@@ -62,7 +98,7 @@ if __name__ == '__main__':
     y_dim = 1
     tot_dim = y_dim + z_dim  # 28
 
-    plot_on_slit = 'train'  # train, valid, test
+    plot_on_slit = 'test'  # train, valid, test
 
     nvp_config = {
         'n_couple_layer': 4,
@@ -77,7 +113,7 @@ if __name__ == '__main__':
                                 num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=0.)
 
     # model.load_weights('logs/phase2_model/modelTAE_weights_phase2')
-    model.load_weights('logs/20230415-000904_GAE_opskl_400_seed1/modelGAE_weights_phase2')
+    model.load_weights('logs/20230415-161729_GAE_eps0.5_b32_kl0.005_ops10/modelGAE_weights_phase2')
     datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, hp=str(200), seed=777),
                                               ratio=[0.8, 0.1, 0.1],
                                               shuffle=True,
@@ -189,37 +225,7 @@ if __name__ == '__main__':
     plt.savefig('decending.png')
     plt.cla()
 
-
-    # Eval query 1.0
-    x = []
-    y = []
-    invalid = 0
-    to_inv_acc = 1.0
-    to_inv = tf.repeat(tf.reshape(tf.constant(to_inv_acc), [-1, 1]), 10, axis=0)
-    ops_idx_lis, adj_list = inverse_from_acc(model, num_sample_z=1, x_dim=x_dim, z_dim=z_dim, to_inv_acc=to_inv)
-    for ops_idx, adj, query_acc in zip(ops_idx_lis, adj_list, to_inv[:, -1]):
-        try:
-            ops = [OPS_by_IDX_201[i] for i in ops_idx]
-            arch_str = ops_list_to_nb201_arch_str(ops)
-            print(arch_str)
-
-            idx = nb201api.query_index_by_arch(arch_str)
-
-            # is_random=False will return the avg. result
-            data = nb201api.get_more_info(idx, 'cifar10-valid', iepoch=199, hp='200', is_random=False)
-            print(data['valid-accuracy'])
-            acc = data['valid-accuracy'] / 100
-            x.append(query_acc)
-            y.append(acc)
-        except:
-            print('invalid')
-            invalid += 1
-
+    invalid, avg_acc, best_acc = eval_query_best(model, x_dim, z_dim)
     print('Number of invalid decode', invalid)
-    print('Avg found acc', sum(y) / len(y))
-    fig, ax = plt.subplots()
-    ax.axline((0, 0), slope=1, linewidth=0.2, color='black')
-    plt.scatter(x, y, s=[1] * len(x))
-    plt.xlim(0.85, 1.2)
-    plt.ylim(0.85, 1.2)
-    plt.savefig('top.png')
+    print('Avg found acc', avg_acc)
+    print('Best found acc', best_acc)

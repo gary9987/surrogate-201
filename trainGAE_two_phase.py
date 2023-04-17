@@ -1,41 +1,26 @@
 import argparse
+import random
 from tensorflow.python.keras.callbacks import CSVLogger, EarlyStopping
 from datasets.transformation import ReshapeYTransform, OnlyValidAccTransform, OnlyFinalAcc, LabelScale_NasBench101
 from invertible_neural_networks.flow import MSE, MMD_multiscale
 from models.GNN import GraphAutoencoder, GraphAutoencoderNVP
-from models.TransformerAE import TransformerAutoencoderNVP, CustomSchedule
+from models.TransformerAE import TransformerAutoencoderNVP
 import tensorflow as tf
-import logging
-import sys, os, datetime
+import os
 from datasets.nb201_dataset import NasBench201Dataset
 from datasets.utils import train_valid_test_split_dataset
 from spektral.data import BatchLoader
-
+from evalGAE import eval_query_best
 from utils.tf_utils import SaveModelCallback
+from utils.py_utils import get_logdir_and_logger
 
-now_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-logdir = os.path.join("logs", now_time)
-os.makedirs(logdir, exist_ok=True)
-logging.basicConfig(filename=os.path.join(logdir, f'train.log'), level=logging.INFO, force=True, filemode='w')
-logger = logging.getLogger(__name__)
-handler = logging.StreamHandler(sys.stdout)
-handler.setLevel(logging.INFO)
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-handler.setFormatter(formatter)
-logger.addHandler(handler)
 
-parser = argparse.ArgumentParser(description='train TAE')
-parser.add_argument('--train_sample_amount', type=int, default=1000, help='Number of samples to train (default: 900)')
-parser.add_argument('--valid_sample_amount', type=int, default=100, help='Number of samples to train (default: 100)')
-parser.add_argument('--seed', type=int, default=0)
-args = parser.parse_args()
-
-random_seed = args.seed
-tf.random.set_seed(random_seed)
-
-num_ops = 7
-num_nodes = 8
-num_adjs = 64
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--train_sample_amount', type=int, default=350, help='Number of samples to train (default: 350)')
+    parser.add_argument('--valid_sample_amount', type=int, default=50, help='Number of samples to train (default: 50)')
+    parser.add_argument('--seed', type=int, default=0)
+    return parser.parse_args()
 
 
 def cal_ops_adj_loss_for_graph(x_batch_train, ops_cls, adj_cls):
@@ -260,13 +245,15 @@ class Trainer2(tf.keras.Model):
     def metrics(self):
         return [value for _, value in self.loss_tracker.items()]
 
-def train(phase: int, model, loader, train_epochs, callbacks=None, x_dim=None, y_dim=None,
-          z_dim=None, finetune=False):
+def train(phase: int, model, loader, train_epochs, logdir, callbacks=None, x_dim=None, y_dim=None,
+          z_dim=None, finetune=False, learning_rate=1e-3):
     #optimizer = tf.keras.optimizers.Adam(CustomSchedule(d_model), beta_1=0.9, beta_2=0.98, epsilon=1e-9)
     if phase == 1:
         trainer = Trainer1(model)
     elif phase == 2:
         trainer = Trainer2(model, x_dim, y_dim, z_dim, finetune)
+    else:
+        raise ValueError('phase should be 1 or 2')
 
     try:
         kw = {'validation_steps': loader['valid'].steps_per_epoch,
@@ -274,7 +261,7 @@ def train(phase: int, model, loader, train_epochs, callbacks=None, x_dim=None, y
     except:
         kw = {}
 
-    trainer.compile(optimizer='adam', run_eagerly=False)
+    trainer.compile(optimizer=tf.keras.optimizers.Adam(learning_rate), run_eagerly=False)
     trainer.fit(loader['train'].load(),
                 validation_data=loader['valid'].load(),
                 epochs=train_epochs,
@@ -284,14 +271,22 @@ def train(phase: int, model, loader, train_epochs, callbacks=None, x_dim=None, y
     return trainer
 
 
-if __name__ == '__main__':
+def main(seed, train_sample_amount, valid_sample_amount):
+    logdir, logger = get_logdir_and_logger(f'trainGAE_two_phase_{seed}.log')
+    random_seed = seed
+    tf.random.set_seed(random_seed)
+    random.seed(random_seed)
+
+    num_ops = 7
+    num_nodes = 8
+    num_adjs = 64
     is_only_validation_data = True
     label_epochs = 200
 
     train_phase = [1, 1]  # 0 not train, 1 train
-    pretrained_phase1_weight = 'logs/20230414-202845_GAE_opskl/modelGAE_weights_phase1'
+    pretrained_weight = 'logs/20230415-161729_GAE_eps0.5_b32_kl0.005_ops10/modelGAE_weights_phase1'
 
-    #repeat = 1
+    # repeat = 1
     eps_scale = 0.5
     d_model = 32
     dropout_rate = 0.0
@@ -301,7 +296,7 @@ if __name__ == '__main__':
     finetune = False
     latent_dim = 14
 
-    train_epochs = 1000
+    train_epochs = 500
     patience = 100
 
     # 15624
@@ -325,10 +320,11 @@ if __name__ == '__main__':
     pad_dim = tot_dim - x_dim  # 14
 
     pretrained_model = GraphAutoencoder(latent_dim=latent_dim, num_layers=num_layers,
-                             d_model=d_model, num_heads=num_heads,
-                             dff=dff, num_ops=num_ops, num_nodes=num_nodes,
-                             num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=eps_scale)
-    pretrained_model((tf.random.normal(shape=(1, num_nodes, num_ops)), tf.random.normal(shape=(1, num_nodes, num_nodes))))
+                                        d_model=d_model, num_heads=num_heads,
+                                        dff=dff, num_ops=num_ops, num_nodes=num_nodes,
+                                        num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=eps_scale)
+    pretrained_model(
+        (tf.random.normal(shape=(1, num_nodes, num_ops)), tf.random.normal(shape=(1, num_nodes, num_nodes))))
 
     nvp_config = {
         'n_couple_layer': 4,
@@ -356,11 +352,11 @@ if __name__ == '__main__':
                      SaveModelCallback(save_dir=logdir, every_epoch=100),
                      tensorboard_callback,
                      EarlyStopping(monitor='val_rec_loss', patience=patience, restore_best_weights=True)]
-        trainer = train(1, pretrained_model, loader, train_epochs, callbacks)
+        trainer = train(1, pretrained_model, loader, train_epochs, logdir, callbacks)
         results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
         logger.info(f'{dict(zip(trainer.metrics_names, results))}')
     else:
-        pretrained_model.load_weights(pretrained_phase1_weight)
+        pretrained_model.load_weights(pretrained_weight)
 
     # Load AE weights from pretrained model
     model.encoder.set_weights(pretrained_model.encoder.get_weights())
@@ -369,27 +365,39 @@ if __name__ == '__main__':
     if train_phase[1]:
         batch_size = 256
         logger.info('Train phase 2')
-
-        tmp_train = datasets['train'][:args.train_sample_amount]
-        tmp_valid = datasets['valid'][:args.valid_sample_amount]
+        random.shuffle(datasets['train'])
+        random.shuffle(datasets['valid'])
+        tmp_train = datasets['train'][:train_sample_amount]
+        tmp_valid = datasets['valid'][:valid_sample_amount]
         datasets['train'] = tmp_train
         datasets['valid'] = tmp_valid
         for i in range(20):
             datasets['train'] += tmp_train
             datasets['valid'] += tmp_valid
 
-        #datasets['train'] = datasets['train'][:args.train_sample_amount]
-        #datasets['valid'] = datasets['valid'][:args.valid_sample_amount]
+        # datasets['train'] = datasets['train'][:args.train_sample_amount]
+        # datasets['valid'] = datasets['valid'][:args.valid_sample_amount]
         loader = {'train': BatchLoader(datasets['train'], batch_size=batch_size, shuffle=True, epochs=train_epochs),
                   'valid': BatchLoader(datasets['valid'], batch_size=batch_size, shuffle=False, epochs=train_epochs),
                   'test': BatchLoader(datasets['test'], batch_size=batch_size, shuffle=False, epochs=1)}
 
         callbacks = [CSVLogger(os.path.join(logdir, f"learning_curve_phase2.csv")),
                      tensorboard_callback,
-                     EarlyStopping(monitor='val_total_loss', patience=patience, restore_best_weights=True)]
-        trainer = train(2, model, loader, train_epochs, callbacks,
+                     EarlyStopping(monitor='val_reg_loss', patience=patience, restore_best_weights=True)]
+        trainer = train(2, model, loader, train_epochs, logdir, callbacks,
                         x_dim=x_dim, y_dim=y_dim, z_dim=z_dim, finetune=finetune)
         results = trainer.evaluate(loader['test'], steps=loader['test'].steps_per_epoch)
         logger.info(str(dict(zip(trainer.metrics_names, results))))
     else:
-        exit()
+        model.load_weights(pretrained_weight)
+
+    invalid, avg_acc, best_acc = eval_query_best(model, x_dim, z_dim)
+    logger.info(f'Number of invalid decode {invalid}')
+    logger.info(f'Avg found acc {avg_acc}')
+    logger.info(f'Best found acc {best_acc}')
+    return invalid, avg_acc, best_acc
+
+
+if __name__ == '__main__':
+    args = parse_args()
+    main(args.seed, args.train_sample_amount, args.valid_sample_amount),
