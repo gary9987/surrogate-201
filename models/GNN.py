@@ -4,28 +4,9 @@ from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Dense
 from spektral.layers import GINConvBatch, GlobalSumPool, GlobalMaxPool, GlobalAvgPool, DiffPool
 import tensorflow as tf
-
 from invertible_neural_networks.flow import NVP
-from models.TransformerAE import Decoder, positional_encoding
-
-
-class PositionalEmbedding(tf.keras.layers.Layer):
-    def __init__(self, d_model, input_length):
-        super().__init__()
-        self.d_model = d_model
-        self.embedding = tf.keras.layers.Dense(d_model, use_bias=False)
-        self.pos_encoding = positional_encoding(length=input_length, depth=d_model)
-
-    def compute_mask(self, *args, **kwargs):
-        return self.embedding.compute_mask(*args, **kwargs)
-
-    def call(self, x):
-        length = tf.shape(x)[1]
-        x = self.embedding(tf.reshape(x, [tf.shape(x)[0], length, -1]))
-        # This factor sets the relative scale of the embedding and positonal_encoding.
-        x *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
-        x = x + self.pos_encoding[tf.newaxis, :length, :]
-        return x
+from models.TransformerAE import Decoder
+from models.base import PositionalEmbedding
 
 
 class Graph_Model(Model):
@@ -61,7 +42,7 @@ class GINEncoder(Model):
         self.graph_conv = GINConvBatch(n_hidden, mlp_hidden=mlp_hidden, mlp_activation=activation, mlp_batchnorm=True,
                                        activation=activation)
         self.bn = tensorflow.keras.layers.BatchNormalization()
-        self.pool = GlobalMaxPool()
+        #self.pool = GlobalAvgPool()
         self.dropout = tensorflow.keras.layers.Dropout(dropout)
         self.mean = Dense(n_hidden)
         self.var = Dense(n_hidden)
@@ -69,7 +50,7 @@ class GINEncoder(Model):
     def call(self, inputs):
         out = self.graph_conv(inputs)
         out = self.bn(out)
-        out = self.pool(out)
+        #out = self.pool(out)
         out = self.dropout(out)
         mean = self.mean(out)
         var = self.var(out)
@@ -81,10 +62,16 @@ class TransformerDecoder(Decoder):
         super(TransformerDecoder, self).__init__(num_layers, d_model, num_heads, dff, num_ops, num_nodes, num_adjs,
                                                  dropout_rate)
         self.pos_embedding = PositionalEmbedding(d_model=d_model, input_length=input_length)
+
         self.adj_cls = [
             Dense(2, activation='softmax')
             for _ in range(num_adjs)
         ]
+
+        self.ops_cls = tf.keras.layers.Dense(num_ops, activation='softmax')
+        self.adj_weight = tf.keras.layers.Dense(8, activation='relu')
+        self.adj_cls = tf.keras.layers.Dense(2, activation='softmax')
+
 
     def call(self, x):
         x = self.pos_embedding(x)
@@ -92,12 +79,16 @@ class TransformerDecoder(Decoder):
         for i in range(self.num_layers):
             x = self.dec_layers[i](x)
 
-        flatten_x = tf.reshape(x, (tf.shape(x)[0], -1))
-        ops_cls = tf.stack([self.ops_cls[i](flatten_x) for i in range(self.num_nodes)], axis=-1)
-        ops_cls = tf.transpose(ops_cls, (0, 2, 1))
+        ops_cls = self.ops_cls(x)
 
-        adj_cls = tf.stack([self.adj_cls[i](flatten_x) for i in range(self.num_adjs)], axis=-1)
-        adj_cls = tf.transpose(adj_cls, (0, 2, 1))
+        x = self.adj_weight(x) # (8, 16) -> (8, 8)
+        x = tf.reshape(x, (tf.shape(x)[0], -1, 1)) #(8, 8, 1)
+        adj_cls = self.adj_cls(x)
+        #ops_cls = tf.stack([self.ops_cls[i](flatten_x) for i in range(self.num_nodes)], axis=-1)
+        #ops_cls = tf.transpose(ops_cls, (0, 2, 1))
+
+        #adj_cls = tf.stack([self.adj_cls[i](flatten_x) for i in range(self.num_adjs)], axis=-1)
+        #adj_cls = tf.transpose(adj_cls, (0, 2, 1))
 
         return ops_cls, adj_cls
 
@@ -114,7 +105,7 @@ class GraphAutoencoder(tf.keras.Model):
         self.encoder = GINEncoder(self.latent_dim, [128, 128, 128, 128], 'relu', dropout_rate)
 
         self.decoder = TransformerDecoder(num_layers=num_layers, d_model=d_model, num_heads=num_heads,
-                               dff=dff, input_length=self.latent_dim, num_ops=num_ops, num_nodes=num_nodes, num_adjs=num_adjs,
+                               dff=dff, input_length=8, num_ops=num_ops, num_nodes=num_nodes, num_adjs=num_adjs,
                                dropout_rate=dropout_rate)
 
     def sample(self, mean, log_var, eps_scale=0.01):
@@ -124,7 +115,7 @@ class GraphAutoencoder(tf.keras.Model):
     def call(self, inputs):
         latent_mean, latent_var = self.encoder(inputs)  # (batch_size, context_len, d_model)
         c = self.sample(latent_mean, latent_var, self.eps_scale)
-        kl_loss = tf.reduce_sum(-0.5 * tf.reduce_sum(1 + latent_var - tf.square(latent_mean) - tf.exp(latent_var), axis=-1))
+        kl_loss = tf.reduce_mean(-0.5 * tf.reduce_sum(1 + latent_var - tf.square(latent_mean) - tf.exp(latent_var), axis=-1))
 
         ops_cls, adj_cls = self.decoder(c)  # (batch_size, target_len, d_model)
 
@@ -151,11 +142,12 @@ class GraphAutoencoderNVP(GraphAutoencoder):
         if nvp_config['inp_dim'] is None:
             nvp_config['inp_dim'] = latent_dim
 
-        self.pad_dim = nvp_config['inp_dim'] - latent_dim
+        self.pad_dim = nvp_config['inp_dim'] - latent_dim * num_nodes
         self.nvp = NVP(**nvp_config)
 
     def call(self, inputs):
         ops_cls, adj_cls, kl_loss, latent_mean = super().call(inputs)
+        latent_mean = tf.reshape(latent_mean, (tf.shape(latent_mean)[0], -1))
         latent_mean = tf.concat([latent_mean, tf.zeros((tf.shape(latent_mean)[0], self.pad_dim))], axis=-1)
         reg = self.nvp(latent_mean)
         return ops_cls, adj_cls, kl_loss, reg, latent_mean
@@ -183,3 +175,22 @@ def bpr_loss(y_true, y_pred):
         total_loss = tf.concat([total_loss, tf.expand_dims(loss_value, 0)], 0)
 
     return total_loss / tf.cast(N, tf.float32) ** 2
+
+
+def weighted_mse(y_true, y_pred):
+
+    N = tf.shape(y_true)[0]  # y_true.shape[0] = batch size
+
+    mse = tf.keras.losses.mse(y_true, y_pred)
+    rank = tf.subtract(y_true, tf.transpose(y_true))
+    rank = tf.where(rank < 0, 1., 0.)
+    rank = tf.reduce_sum(rank, axis=1)
+    weight = tf.math.reciprocal(rank + tf.cast(N, tf.float32) * 1e-3)
+    '''
+    mse = tf.keras.losses.mse(y_true, y_pred)
+    weight = []
+    for i in range(N):
+        rank = tf.cast(tf.reduce_sum(tf.where(y_true > y_true[i], 1, 0)), tf.float32)
+        weight.append(1. / (tf.cast(N, tf.float32) * 10e-3 + rank))
+    '''
+    return tf.reduce_sum(tf.multiply(mse, weight))

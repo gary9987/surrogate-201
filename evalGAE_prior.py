@@ -52,7 +52,7 @@ def prior_validity(model, loader, n_latent_point, nb201api):
     decode_times = 10
     g_valid = []
     for _ in tqdm(range(n_latent_point)):
-        z = tf.random.normal((1, model.latent_dim), dtype=tf.float32)
+        z = tf.random.normal((1, 8, model.latent_dim), dtype=tf.float32)
         z = z * z_std + z_mean  # move to train's latent range
         z = tf.repeat(z, decode_times, axis=0)
         #for _ in range(decode_times):
@@ -98,9 +98,9 @@ if __name__ == '__main__':
     num_layers = 3
     num_heads = 3
 
-    latent_dim = 14
-    x_dim = latent_dim  # 14
-    z_dim = latent_dim * 2 - 1  # 27
+    latent_dim = 16
+    x_dim = latent_dim * num_nodes  # 14
+    z_dim = x_dim - 1  # 27
     y_dim = 1
     tot_dim = y_dim + z_dim  # 28
 
@@ -118,7 +118,7 @@ if __name__ == '__main__':
                                 num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=0.)
 
     # model.load_weights('logs/phase2_model/modelTAE_weights_phase2')
-    model.load_weights('logs/20230414-011142/modelGAE_weights_phase2')
+    model.load_weights('logs/20230418-143548/modelGAE_weights_phase2')
     datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, hp=str(200), seed=777),
                                               ratio=[0.8, 0.1, 0.1],
                                               shuffle=True,

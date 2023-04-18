@@ -3,12 +3,12 @@ import random
 from tensorflow.python.keras.callbacks import CSVLogger, EarlyStopping
 from datasets.transformation import ReshapeYTransform, OnlyValidAccTransform, OnlyFinalAcc, LabelScale_NasBench101
 from invertible_neural_networks.flow import MSE, MMD_multiscale
-from models.GNN import GraphAutoencoder, GraphAutoencoderNVP
+from models.GNN import GraphAutoencoder, GraphAutoencoderNVP, weighted_mse
 from models.TransformerAE import TransformerAutoencoderNVP
 import tensorflow as tf
 import os
 from datasets.nb201_dataset import NasBench201Dataset
-from datasets.utils import train_valid_test_split_dataset
+from datasets.utils import train_valid_test_split_dataset, mask_graph_dataset
 from spektral.data import BatchLoader
 from evalGAE import eval_query_best
 from utils.tf_utils import SaveModelCallback
@@ -25,7 +25,7 @@ def parse_args():
 
 def cal_ops_adj_loss_for_graph(x_batch_train, ops_cls, adj_cls):
     ops_label, adj_label = x_batch_train
-    adj_label = tf.reshape(adj_label, [tf.shape(adj_label)[0], -1])
+    #adj_label = tf.reshape(adj_label, [tf.shape(adj_label)[0], -1])
     #ops_loss = tf.keras.losses.CategoricalCrossentropy(from_logits=False)(ops_label, ops_cls)
     ops_loss = tf.keras.losses.KLDivergence()(ops_label, ops_cls)
     adj_loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)(adj_label, adj_cls)
@@ -41,9 +41,9 @@ class Trainer1(tf.keras.Model):
     def __init__(self, model: GraphAutoencoder):
         super(Trainer1, self).__init__()
         self.model = model
-        self.ops_weight = 10
+        self.ops_weight = 1
         self.adj_weight = 1
-        self.kl_weight = 0.005
+        self.kl_weight = 0.16
 
         self.loss_tracker = {
             'rec_loss': tf.keras.metrics.Mean(name="rec_loss"),
@@ -105,8 +105,6 @@ class Trainer2(tf.keras.Model):
         self.z_dim = z_dim
         self.finetune = finetune
 
-        # For rec loss weight
-        self.w0 = 10.
         # For reg loss weight
         self.w1 = 5.
         # For latent loss weight
@@ -115,6 +113,7 @@ class Trainer2(tf.keras.Model):
         self.w3 = 10.
 
         self.reg_loss_fn = tf.keras.losses.MeanSquaredError()
+        #self.reg_loss_fn = weighted_mse
         self.loss_latent = MMD_multiscale
         self.loss_backward = MSE
         self.loss_tracker = {
@@ -124,7 +123,15 @@ class Trainer2(tf.keras.Model):
             'rev_loss': tf.keras.metrics.Mean(name="rev_loss")
         }
         if self.finetune:
-            self.loss_tracker['rec_loss'] = tf.keras.metrics.Mean(name="rec_loss")
+            self.loss_tracker.update({
+                'rec_loss': tf.keras.metrics.Mean(name="rec_loss"),
+                'ops_loss': tf.keras.metrics.Mean(name="ops_loss"),
+                'adj_loss': tf.keras.metrics.Mean(name="adj_loss"),
+                'kl_loss': tf.keras.metrics.Mean(name="kl_loss")
+            })
+            self.ops_weight = 1
+            self.adj_weight = 1
+            self.kl_weight = 0.16
 
 
     def cal_reg_and_latent_loss(self, y, z, y_out, nan_mask):
@@ -165,7 +172,7 @@ class Trainer2(tf.keras.Model):
             # The operations that the layer applies
             # to its inputs are going to be recorded
             # on the GradientTape.
-            ops_cls, adj_cls, kl_loss, y_out, x_encoding = self.model(undirected_x_batch_train, training=True)
+            ops_cls, adj_cls, kl_loss, y_out, x_encoding = self.model(undirected_x_batch_train, training=False)
 
             # To avoid nan loss when batch size is small
             reg_loss, latent_loss = tf.cond(tf.shape(nan_mask)[0] != 0,
@@ -188,8 +195,8 @@ class Trainer2(tf.keras.Model):
             rec_loss = 0.
             if self.finetune:
                 ops_loss, adj_loss = cal_ops_adj_loss_for_graph(x_batch_train, ops_cls, adj_cls)
-                rec_loss = ops_loss + adj_loss + kl_loss
-                forward_loss += self.w0 * rec_loss
+                rec_loss = self.ops_weight * ops_loss + self.adj_weight * adj_loss + self.kl_weight * kl_loss
+                forward_loss += rec_loss
 
         grads = tape.gradient(forward_loss, self.model.trainable_weights)
         self.optimizer.apply_gradients(zip(grads, self.model.trainable_weights))
@@ -213,6 +220,9 @@ class Trainer2(tf.keras.Model):
         self.loss_tracker['rev_loss'].update_state(rev_loss)
         if self.finetune:
             self.loss_tracker['rec_loss'].update_state(rec_loss)
+            self.loss_tracker['ops_loss'].update_state(ops_loss)
+            self.loss_tracker['adj_loss'].update_state(adj_loss)
+            self.loss_tracker['kl_loss'].update_state(kl_loss)
 
         return {key: value.result() for key, value in self.loss_tracker.items()}
 
@@ -221,16 +231,17 @@ class Trainer2(tf.keras.Model):
         undirected_x_batch_train = (x_batch_train[0], to_undiredted_adj(x_batch_train[1]))
         y = y_batch_train[:, -self.y_dim:]
         z = tf.random.normal(shape=[tf.shape(y_batch_train)[0], self.z_dim])
+        nan_mask = tf.squeeze(tf.where(~tf.math.is_nan(tf.reduce_sum(y_batch_train, axis=-1)), x=0, y=1))
 
         ops_cls, adj_cls, kl_loss, y_out, x_encoding = self.model(undirected_x_batch_train, training=False)
-        reg_loss, latent_loss = self.cal_reg_and_latent_loss(y, z, y_out, tf.zeros(tf.shape(y_batch_train)[0], dtype=tf.int32))
+        reg_loss, latent_loss = self.cal_reg_and_latent_loss(y, z, y_out, nan_mask)
         forward_loss = self.w1 * reg_loss + self.w2 * latent_loss
-        rev_loss = self.cal_rev_loss(undirected_x_batch_train, y, z, tf.zeros(tf.shape(y_batch_train)[0], dtype=tf.int32), 0.)
+        rev_loss = self.cal_rev_loss(undirected_x_batch_train, y, z, nan_mask, 0.)
         backward_loss = self.w3 * rev_loss
         if self.finetune:
             ops_loss, adj_loss = cal_ops_adj_loss_for_graph(x_batch_train, ops_cls, adj_cls)
-            rec_loss = ops_loss + adj_loss + kl_loss
-            forward_loss += self.w0 * rec_loss
+            rec_loss = self.ops_weight * ops_loss + self.adj_weight * adj_loss + self.kl_weight * kl_loss
+            forward_loss += rec_loss
 
         self.loss_tracker['total_loss'].update_state(forward_loss + backward_loss)
         self.loss_tracker['reg_loss'].update_state(reg_loss)
@@ -238,6 +249,9 @@ class Trainer2(tf.keras.Model):
         self.loss_tracker['rev_loss'].update_state(rev_loss)
         if self.finetune:
             self.loss_tracker['rec_loss'].update_state(rec_loss)
+            self.loss_tracker['ops_loss'].update_state(ops_loss)
+            self.loss_tracker['adj_loss'].update_state(adj_loss)
+            self.loss_tracker['kl_loss'].update_state(kl_loss)
 
         return {key: value.result() for key, value in self.loss_tracker.items()}
 
@@ -283,21 +297,21 @@ def main(seed, train_sample_amount, valid_sample_amount):
     is_only_validation_data = True
     label_epochs = 200
 
-    train_phase = [1, 1]  # 0 not train, 1 train
-    pretrained_weight = 'logs/20230415-161729_GAE_eps0.5_b32_kl0.005_ops10/modelGAE_weights_phase1'
+    train_phase = [0, 1]  # 0 not train, 1 train
+    pretrained_weight = 'logs/20230418-152148/modelGAE_weights_phase1'
 
     # repeat = 1
-    eps_scale = 0.5
+    eps_scale = 0.05  # 0.1
     d_model = 32
     dropout_rate = 0.0
     dff = 256
     num_layers = 3
     num_heads = 3
-    finetune = False
-    latent_dim = 14
+    finetune = True
+    latent_dim = 16
 
     train_epochs = 500
-    patience = 100
+    patience = 150
 
     # 15624
     datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, hp=str(label_epochs), seed=False),
@@ -313,9 +327,10 @@ def main(seed, train_sample_amount, valid_sample_amount):
         else:
             datasets[key].apply(ReshapeYTransform())
 
-    x_dim = latent_dim
+    x_dim = latent_dim * num_nodes
     y_dim = 1  # 1
-    z_dim = latent_dim * 2 - 1  # 27
+    z_dim = x_dim - 1  # 27
+    #z_dim = latent_dim * 4 - 1
     tot_dim = y_dim + z_dim  # 28
     pad_dim = tot_dim - x_dim  # 14
 
@@ -336,7 +351,7 @@ def main(seed, train_sample_amount, valid_sample_amount):
     model = GraphAutoencoderNVP(nvp_config=nvp_config, latent_dim=latent_dim, num_layers=num_layers,
                                 d_model=d_model, num_heads=num_heads,
                                 dff=dff, num_ops=num_ops, num_nodes=num_nodes,
-                                num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=0.0)
+                                num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=eps_scale)
     model((tf.random.normal(shape=(1, num_nodes, num_ops)), tf.random.normal(shape=(1, num_nodes, num_nodes))))
     model.summary(print_fn=logger.info)
 
@@ -344,9 +359,10 @@ def main(seed, train_sample_amount, valid_sample_amount):
 
     if train_phase[0]:
         logger.info('Train phase 1')
-        batch_size = 32
-        loader = {'train': BatchLoader(datasets['train'], batch_size=batch_size, shuffle=True, epochs=train_epochs*2),
-                  'valid': BatchLoader(datasets['valid'], batch_size=batch_size, shuffle=False, epochs=train_epochs*2),
+        batch_size = 256
+        loader = {'train': BatchLoader(datasets['train'], batch_size=batch_size, shuffle=True, epochs=train_epochs * 2),
+                  'valid': BatchLoader(datasets['valid'], batch_size=batch_size, shuffle=False,
+                                       epochs=train_epochs * 2),
                   'test': BatchLoader(datasets['test'], batch_size=batch_size, shuffle=False, epochs=1)}
         callbacks = [CSVLogger(os.path.join(logdir, "learning_curve_phase1.csv")),
                      SaveModelCallback(save_dir=logdir, every_epoch=100),
@@ -367,6 +383,7 @@ def main(seed, train_sample_amount, valid_sample_amount):
         logger.info('Train phase 2')
         random.shuffle(datasets['train'])
         random.shuffle(datasets['valid'])
+        '''
         tmp_train = datasets['train'][:train_sample_amount]
         tmp_valid = datasets['valid'][:valid_sample_amount]
         datasets['train'] = tmp_train
@@ -374,6 +391,9 @@ def main(seed, train_sample_amount, valid_sample_amount):
         for i in range(20):
             datasets['train'] += tmp_train
             datasets['valid'] += tmp_valid
+        '''
+        datasets['train'] = mask_graph_dataset(datasets['train'], train_sample_amount, 20)
+        datasets['valid'] = mask_graph_dataset(datasets['valid'], valid_sample_amount, 20)
 
         # datasets['train'] = datasets['train'][:args.train_sample_amount]
         # datasets['valid'] = datasets['valid'][:args.valid_sample_amount]

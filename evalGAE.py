@@ -21,20 +21,20 @@ tf.random.set_seed(random_seed)
 def inverse_from_acc(model: tf.keras.Model, num_sample_z: int, x_dim: int, z_dim: int, to_inv_acc):
     batch_size = int(tf.shape(to_inv_acc)[0])
     y = tf.repeat(to_inv_acc, num_sample_z, axis=0)  # (batch_size * num_sample_z, 1)
-
     z = np.random.multivariate_normal([0.] * z_dim, np.eye(z_dim),
                                       size=batch_size * num_sample_z)  # (num_sample_z, z_dim)
     y = np.concatenate([z, y], axis=-1).astype(np.float32)  # (num_sample_z, z_dim + 1)
 
     rev_latent = model.inverse(y)  # (num_sample_z, latent_dim)
-    rev_latent = rev_latent[:, :x_dim]
+    #rev_latent = rev_latent[:, :x_dim]
+    rev_latent = tf.reshape(rev_latent, (batch_size, 8, -1))  # (batch_size, num_sample_z, latent_dim)
     _, adj, ops_cls, adj_cls = model.decode(rev_latent)
     ops_cls = tf.reshape(ops_cls, (batch_size, num_sample_z, -1, model.num_ops))  # (batch_size, num_sample_z, 8, 7)
     ops_vote = tf.reduce_sum(ops_cls, axis=1).numpy()  # (batch_size, 1, 8 * 7)
 
-    adj = tf.reshape(adj, (batch_size, num_sample_z, model.num_adjs))  # (batch_size, num_sample_z, 8 * 8)
+    adj = tf.reshape(adj, (batch_size, num_sample_z, 8, 8))  # (batch_size, num_sample_z, 8 * 8)
     adj = tf.where(tf.reduce_mean(adj, axis=1) >= 0.5, x=1., y=0.).numpy()  # (batch_size, 8 * 8)
-    adj = np.reshape(adj, (batch_size, int(adj.shape[-1] ** (1 / 2)), int(adj.shape[-1] ** (1 / 2))))
+    #adj = np.reshape(adj, (batch_size, int(adj.shape[-1] ** (1 / 2)), int(adj.shape[-1] ** (1 / 2))))
 
     ops_idx_list = []
     adj_list = []
@@ -92,28 +92,30 @@ if __name__ == '__main__':
     num_layers = 3
     num_heads = 3
 
-    latent_dim = 14
-    x_dim = latent_dim  # 14
-    z_dim = latent_dim * 2 - 1  # 27
-    y_dim = 1
+    latent_dim = 16
+    x_dim = latent_dim * num_nodes
+    y_dim = 1  # 1
+    z_dim = x_dim - 1  # 27
+    # z_dim = latent_dim * 4 - 1
     tot_dim = y_dim + z_dim  # 28
+    pad_dim = tot_dim - x_dim  # 14
 
-    plot_on_slit = 'test'  # train, valid, test
+    plot_on_slit = 'train'  # train, valid, test
 
     nvp_config = {
         'n_couple_layer': 4,
         'n_hid_layer': 4,
         'n_hid_dim': 256,
         'name': 'NVP',
-        'inp_dim': tot_dim
+        'inp_dim': x_dim
     }
 
     model = GraphAutoencoderNVP(nvp_config=nvp_config, latent_dim=latent_dim, num_layers=num_layers,
                                 d_model=d_model, num_heads=num_heads,dff=dff, num_ops=num_ops, num_nodes=num_nodes,
                                 num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=0.)
-
+    model((tf.random.normal(shape=(1, num_nodes, num_ops)), tf.random.normal(shape=(1, num_nodes, num_nodes))))
     # model.load_weights('logs/phase2_model/modelTAE_weights_phase2')
-    model.load_weights('logs/20230415-161729_GAE_eps0.5_b32_kl0.005_ops10/modelGAE_weights_phase2')
+    model.load_weights('logs/20230418-152148/modelGAE_weights_phase2')
     datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, hp=str(200), seed=777),
                                               ratio=[0.8, 0.1, 0.1],
                                               shuffle=True,
