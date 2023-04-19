@@ -178,7 +178,7 @@ class Trainer2(tf.keras.Model):
             reg_loss, latent_loss = tf.cond(tf.shape(nan_mask)[0] != 0,
                                             lambda: self.cal_reg_and_latent_loss(y, z, y_out, nan_mask),
                                             lambda: (0., 0.))
-            ''' Original code for Eargly execution
+            ''' Original code for Eagerly execution
             # To avoid nan loss when batch size is small
             if tf.shape(nan_mask)[0] != 0):
                 reg_loss = self.reg_loss_fn(tf.gather(y, nan_mask),
@@ -297,7 +297,7 @@ def main(seed, train_sample_amount, valid_sample_amount):
     is_only_validation_data = True
     label_epochs = 200
 
-    train_phase = [0, 1]  # 0 not train, 1 train
+    train_phase = [1, 1]  # 0 not train, 1 train
     pretrained_weight = 'logs/20230418-152148/modelGAE_weights_phase1'
 
     # repeat = 1
@@ -310,8 +310,8 @@ def main(seed, train_sample_amount, valid_sample_amount):
     finetune = True
     latent_dim = 16
 
-    train_epochs = 500
-    patience = 150
+    train_epochs = 1000
+    patience = 200
 
     # 15624
     datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, hp=str(label_epochs), seed=False),
@@ -361,11 +361,11 @@ def main(seed, train_sample_amount, valid_sample_amount):
         logger.info('Train phase 1')
         batch_size = 256
         loader = {'train': BatchLoader(datasets['train'], batch_size=batch_size, shuffle=True, epochs=train_epochs * 2),
-                  'valid': BatchLoader(datasets['valid'], batch_size=batch_size, shuffle=False,
-                                       epochs=train_epochs * 2),
+                  'valid': BatchLoader(datasets['valid'], batch_size=batch_size, shuffle=False, epochs=train_epochs * 2),
                   'test': BatchLoader(datasets['test'], batch_size=batch_size, shuffle=False, epochs=1)}
         callbacks = [CSVLogger(os.path.join(logdir, "learning_curve_phase1.csv")),
-                     SaveModelCallback(save_dir=logdir, every_epoch=100),
+                     tf.keras.callbacks.ReduceLROnPlateau(monitor='val_rec_loss', factor=0.1, patience=100, verbose=1,
+                                                          min_lr=1e-5),
                      tensorboard_callback,
                      EarlyStopping(monitor='val_rec_loss', patience=patience, restore_best_weights=True)]
         trainer = train(1, pretrained_model, loader, train_epochs, logdir, callbacks)
@@ -381,8 +381,6 @@ def main(seed, train_sample_amount, valid_sample_amount):
     if train_phase[1]:
         batch_size = 256
         logger.info('Train phase 2')
-        random.shuffle(datasets['train'])
-        random.shuffle(datasets['valid'])
         '''
         tmp_train = datasets['train'][:train_sample_amount]
         tmp_valid = datasets['valid'][:valid_sample_amount]
@@ -392,21 +390,23 @@ def main(seed, train_sample_amount, valid_sample_amount):
             datasets['train'] += tmp_train
             datasets['valid'] += tmp_valid
         '''
-        datasets['train'] = mask_graph_dataset(datasets['train'], train_sample_amount, 20)
-        datasets['valid'] = mask_graph_dataset(datasets['valid'], valid_sample_amount, 20)
+        datasets['train'] = mask_graph_dataset(datasets['train'], train_sample_amount, 20, random_seed=random_seed)
+        datasets['valid'] = mask_graph_dataset(datasets['valid'], valid_sample_amount, 20, random_seed=random_seed)
 
         # datasets['train'] = datasets['train'][:args.train_sample_amount]
         # datasets['valid'] = datasets['valid'][:args.valid_sample_amount]
-        loader = {'train': BatchLoader(datasets['train'], batch_size=batch_size, shuffle=True, epochs=train_epochs),
-                  'valid': BatchLoader(datasets['valid'], batch_size=batch_size, shuffle=False, epochs=train_epochs),
+        loader = {'train': BatchLoader(datasets['train'], batch_size=batch_size, shuffle=True, epochs=train_epochs * 2),
+                  'valid': BatchLoader(datasets['valid'], batch_size=batch_size, shuffle=False, epochs=train_epochs * 2),
                   'test': BatchLoader(datasets['test'], batch_size=batch_size, shuffle=False, epochs=1)}
 
         callbacks = [CSVLogger(os.path.join(logdir, f"learning_curve_phase2.csv")),
                      tensorboard_callback,
-                     EarlyStopping(monitor='val_reg_loss', patience=patience, restore_best_weights=True)]
+                     tf.keras.callbacks.ReduceLROnPlateau(monitor='val_total_loss', factor=0.1, patience=100, verbose=1,
+                                                          min_lr=1e-5),
+                     EarlyStopping(monitor='val_total_loss', patience=patience, restore_best_weights=True)]
         trainer = train(2, model, loader, train_epochs, logdir, callbacks,
                         x_dim=x_dim, y_dim=y_dim, z_dim=z_dim, finetune=finetune)
-        results = trainer.evaluate(loader['test'], steps=loader['test'].steps_per_epoch)
+        results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
         logger.info(str(dict(zip(trainer.metrics_names, results))))
     else:
         model.load_weights(pretrained_weight)

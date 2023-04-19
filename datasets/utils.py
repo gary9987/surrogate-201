@@ -129,15 +129,16 @@ def to_latent_feature_data(graph_dataset, reg_size):
     return np.array(features).astype(np.float32), np.array(y_list).astype(np.float32)
 
 
-def mask_graph_dataset(graph_dataset, reg_size, non_nan_repeat):
+def mask_graph_dataset(graph_dataset, reg_size: int, non_nan_repeat: int, random_seed=0):
     if reg_size == -1:
         nan_size = 0
     else:
         nan_size = len(graph_dataset) - reg_size
 
+    np.random.seed(random_seed)
     to_nan_idx = np.random.choice(range(len(graph_dataset)), nan_size, replace=False)
-    size = len(graph_dataset)
-    for i in range(size):
+
+    for i in range(len(graph_dataset)):
         if i in to_nan_idx:
             graph_dataset[i].y = np.array([np.nan])
         else:
