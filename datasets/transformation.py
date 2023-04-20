@@ -98,7 +98,7 @@ class SelectNoneNanData_NasBench101:
         return graph
 
 
-class LabelScale_NasBench101:
+class LabelScale:
     def __init__(self, scale=100):
         self.scale = scale
 

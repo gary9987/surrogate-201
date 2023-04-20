@@ -3,7 +3,7 @@ import tensorflow as tf
 from tqdm import tqdm
 from datasets.nb201_dataset import NasBench201Dataset
 from datasets.query_nb201 import OPS_by_IDX_201
-from datasets.transformation import OnlyValidAccTransform, ReshapeYTransform, OnlyFinalAcc, LabelScale_NasBench101
+from datasets.transformation import OnlyValidAccTransform, ReshapeYTransform, OnlyFinalAcc, LabelScale
 from datasets.utils import train_valid_test_split_dataset, ops_list_to_nb201_arch_str
 from models.GNN import GraphAutoencoderNVP
 from nats_bench import create
@@ -118,7 +118,7 @@ if __name__ == '__main__':
                                 num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=0.)
 
     # model.load_weights('logs/phase2_model/modelTAE_weights_phase2')
-    model.load_weights('logs/20230418-143548/modelGAE_weights_phase2')
+    model.load_weights('logs/20230418-152148/modelGAE_weights_phase1')
     datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, hp=str(200), seed=777),
                                               ratio=[0.8, 0.1, 0.1],
                                               shuffle=True,
@@ -127,7 +127,7 @@ if __name__ == '__main__':
     for key in datasets:
         datasets[key].apply(OnlyValidAccTransform())
         datasets[key].apply(OnlyFinalAcc())
-        datasets[key].apply(LabelScale_NasBench101(scale=0.01))
+        datasets[key].apply(LabelScale(scale=0.01))
 
     nb201api = create(None, 'tss', fast_mode=True, verbose=False)
 

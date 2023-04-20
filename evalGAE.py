@@ -1,8 +1,9 @@
+from typing import Union
 import numpy as np
 import tensorflow as tf
 from datasets.nb201_dataset import NasBench201Dataset
 from datasets.query_nb201 import OPS_by_IDX_201
-from datasets.transformation import OnlyValidAccTransform, ReshapeYTransform, OnlyFinalAcc, LabelScale_NasBench101
+from datasets.transformation import OnlyValidAccTransform, ReshapeYTransform, OnlyFinalAcc, LabelScale
 from datasets.utils import train_valid_test_split_dataset, ops_list_to_nb201_arch_str
 from models.GNN import GraphAutoencoderNVP
 from nats_bench import create
@@ -17,6 +18,8 @@ random_seed = 0
 np.random.seed(random_seed)
 tf.random.set_seed(random_seed)
 
+nb201api = create(None, 'tss', fast_mode=True, verbose=False)
+
 
 def inverse_from_acc(model: tf.keras.Model, num_sample_z: int, x_dim: int, z_dim: int, to_inv_acc):
     batch_size = int(tf.shape(to_inv_acc)[0])
@@ -26,6 +29,7 @@ def inverse_from_acc(model: tf.keras.Model, num_sample_z: int, x_dim: int, z_dim
     y = np.concatenate([z, y], axis=-1).astype(np.float32)  # (num_sample_z, z_dim + 1)
 
     rev_latent = model.inverse(y)  # (num_sample_z, latent_dim)
+    #rev_latent += 0.05 * tf.random.normal(tf.shape(rev_latent))
     #rev_latent = rev_latent[:, :x_dim]
     rev_latent = tf.reshape(rev_latent, (batch_size, 8, -1))  # (batch_size, num_sample_z, latent_dim)
     _, adj, ops_cls, adj_cls = model.decode(rev_latent)
@@ -45,29 +49,48 @@ def inverse_from_acc(model: tf.keras.Model, num_sample_z: int, x_dim: int, z_dim
     return ops_idx_list, adj_list
 
 
-def eval_query_best(model: tf.keras.Model, x_dim: int, z_dim: int):
+def query_acc_by_ops(ops: Union[list, np.ndarray], is_random=False, on='valid-accuracy') -> float:
+    """
+    :param ops: ops_idx or ops_cls
+    :param is_random: False will return the avg. of result
+    :param on: valid-accuracy or test-accuracy
+    :return: acc
+    """
+    if isinstance(ops, np.ndarray):
+        ops_idx = np.argmax(ops, axis=-1)
+    else:
+        ops_idx = ops
+    ops = [OPS_by_IDX_201[i] for i in ops_idx]
+    arch_str = ops_list_to_nb201_arch_str(ops)
+    idx = nb201api.query_index_by_arch(arch_str)
+
+    if on == 'valid-accuracy':
+        data = nb201api.get_more_info(idx, 'cifar10-valid', iepoch=199, hp='200', is_random=is_random)
+        acc = data['valid-accuracy'] / 100
+    elif on == 'test-accuracy':
+        data = nb201api.get_more_info(idx, 'cifar10', iepoch=199, hp='200', is_random=is_random)
+        acc = data['test-accuracy'] / 100
+    else:
+        raise ValueError('on should be valid-accuracy or test-accuracy')
+    return acc
+
+
+def eval_query_best(model: tf.keras.Model, x_dim: int, z_dim: int, query_amount=10, noise_scale=0.0):
     # Eval query 1.0
-    nb201api = create(None, 'tss', fast_mode=True, verbose=False)
     x = []
     y = []
+    found_arch_list = []
     invalid = 0
     to_inv_acc = 1.0
-    to_inv = tf.repeat(tf.reshape(tf.constant(to_inv_acc), [-1, 1]), 10, axis=0)
+    to_inv = tf.repeat(tf.reshape(tf.constant(to_inv_acc), [-1, 1]), query_amount, axis=0)
+    to_inv += noise_scale * tf.random.normal(tf.shape(to_inv))
     ops_idx_lis, adj_list = inverse_from_acc(model, num_sample_z=1, x_dim=x_dim, z_dim=z_dim, to_inv_acc=to_inv)
     for ops_idx, adj, query_acc in zip(ops_idx_lis, adj_list, to_inv[:, -1]):
         try:
-            ops = [OPS_by_IDX_201[i] for i in ops_idx]
-            arch_str = ops_list_to_nb201_arch_str(ops)
-            print(arch_str)
-
-            idx = nb201api.query_index_by_arch(arch_str)
-
-            # is_random=False will return the avg. result
-            data = nb201api.get_more_info(idx, 'cifar10-valid', iepoch=199, hp='200', is_random=False)
-            print(data['valid-accuracy'])
-            acc = data['valid-accuracy'] / 100
+            acc = query_acc_by_ops(ops_idx, is_random=False)
             x.append(query_acc)
             y.append(acc)
+            found_arch_list.append({'x': np.eye(len(OPS_by_IDX_201))[ops_idx], 'a': adj, 'y': np.array([acc])})
         except:
             print('invalid')
             invalid += 1
@@ -78,7 +101,7 @@ def eval_query_best(model: tf.keras.Model, x_dim: int, z_dim: int):
     plt.xlim(0.85, 1.2)
     plt.ylim(0.85, 1.2)
     plt.savefig('top.png')
-    return invalid, sum(y) / len(y), max(y)
+    return invalid, sum(y) / len(y), max(y), found_arch_list
 
 
 if __name__ == '__main__':
@@ -115,7 +138,7 @@ if __name__ == '__main__':
                                 num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=0.)
     model((tf.random.normal(shape=(1, num_nodes, num_ops)), tf.random.normal(shape=(1, num_nodes, num_nodes))))
     # model.load_weights('logs/phase2_model/modelTAE_weights_phase2')
-    model.load_weights('logs/20230418-152148/modelGAE_weights_phase2')
+    model.load_weights('logs/20230420-053812/modelGAE_weights_phase2')
     datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, hp=str(200), seed=777),
                                               ratio=[0.8, 0.1, 0.1],
                                               shuffle=True,
@@ -124,9 +147,7 @@ if __name__ == '__main__':
     for key in datasets:
         datasets[key].apply(OnlyValidAccTransform())
         datasets[key].apply(OnlyFinalAcc())
-        datasets[key].apply(LabelScale_NasBench101(scale=0.01))
-
-    nb201api = create(None, 'tss', fast_mode=True, verbose=False)
+        datasets[key].apply(LabelScale(scale=0.01))
 
     # Eval inverse
     datasets['train'] = datasets['train'][:350]
@@ -227,7 +248,7 @@ if __name__ == '__main__':
     plt.savefig('decending.png')
     plt.cla()
 
-    invalid, avg_acc, best_acc = eval_query_best(model, x_dim, z_dim)
+    invalid, avg_acc, best_acc, _ = eval_query_best(model, x_dim, z_dim)
     print('Number of invalid decode', invalid)
     print('Avg found acc', avg_acc)
     print('Best found acc', best_acc)
