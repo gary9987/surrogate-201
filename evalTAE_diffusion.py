@@ -15,28 +15,37 @@ random_seed = 0
 np.random.seed(random_seed)
 tf.random.set_seed(random_seed)
 
+num_ops = 7
+num_nodes = 8
+num_adjs = 64
 
-def inverse_from_acc(model: TransformerAutoencoderDiffusion, num_sample_z: int, to_inv_acc: float):
-    num_ops = 7
-    num_nodes = 8
+def inverse_from_acc(model: TransformerAutoencoderDiffusion, num_sample_z: int, to_inv_acc):
 
-    noise = tf.random.normal(shape=[1, 10, 12, 4])
+    batch_size = int(tf.shape(to_inv_acc)[0])
+
+    noise = tf.random.normal(shape=[batch_size, 10, 12, 4])
     for i in range(model.diffusion_steps)[::-1]:
-        acc = tf.constant(to_inv_acc, shape=[1, 1])
-        t = tf.constant(i, shape=[1, 1])
+        acc = tf.constant(to_inv_acc, shape=[batch_size, 1])
+        t = tf.repeat(tf.constant(i, shape=[1, 1]), repeats=batch_size, axis=0)
         noise = model.denoise(noise, acc, t)
 
-    latent = tf.reshape(noise, (1, -1, model.d_model))
-    rev_x = model.decode(tf.reshape(noise, (1, -1, model.d_model)))  # (num_sample_z, input_size(120))
+    latent = tf.reshape(noise, (batch_size, -1, model.d_model))
+    _, adj, ops_cls, adj_cls = model.decode(tf.reshape(noise, (batch_size, -1, model.d_model)))  # (num_sample_z, input_size(120))
 
-    ops_vote = tf.reduce_sum(rev_x[:, :num_ops * num_nodes], axis=0).numpy()  # 7 ops 8 nodes
-    adj = tf.where(tf.reduce_mean(rev_x[:, num_ops * num_nodes:], axis=0) >= 0.5, x=1., y=0.).numpy()  # (1, 8 * 8)
-    adj = np.reshape(adj, (int(adj.shape[-1]**(1/2)), int(adj.shape[-1]**(1/2))))
-    ops_idx = []
-    for i in range(num_nodes):
-        ops_idx.append(np.argmax(ops_vote[i * num_ops: (i + 1) * num_ops], axis=-1))
+    ops_cls = tf.reshape(ops_cls, (batch_size, num_sample_z, -1, model.num_ops)) # (batch_size, num_sample_z, 8, 7)
+    ops_vote = tf.reduce_sum(ops_cls, axis=1).numpy()  # (batch_size, 1, 8 * 7)
 
-    return ops_idx, adj, latent
+    adj = tf.reshape(adj, (batch_size, num_sample_z, model.num_adjs))  # (batch_size, num_sample_z, 8 * 8)
+    adj = tf.where(tf.reduce_mean(adj, axis=1) >= 0.5, x=1., y=0.).numpy()  # (batch_size, 8 * 8)
+    adj = np.reshape(adj, (batch_size, int(adj.shape[-1]**(1/2)), int(adj.shape[-1]**(1/2))))
+
+    ops_idx_list = []
+    adj_list = []
+    for i, j in zip(ops_vote, adj):
+        ops_idx_list.append(np.argmax(i, axis=-1).tolist())
+        adj_list.append(j)
+
+    return ops_idx_list, adj_list
 
 
 if __name__ == '__main__':
@@ -49,10 +58,10 @@ if __name__ == '__main__':
     input_size = 120
 
     model = TransformerAutoencoderDiffusion(num_layers=num_layers, d_model=d_model, num_heads=num_heads, dff=dff,
-                                            input_size=input_size, diffusion_steps=diffusion_steps,
-                                            dropout_rate=dropout_rate)
+                                            input_size=input_size, num_ops=num_ops, num_nodes=num_nodes, num_adjs=num_adjs,
+                                            diffusion_steps=diffusion_steps, dropout_rate=dropout_rate)
 
-    model.load_weights('logs/trainTAE_diffusion/20230407-135542/modelTAE_weights')
+    model.load_weights('logs/trainTAE_diffusion/20230408-010759/modelTAE_diffusion_weights')
     datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, hp=str(200), seed=777),
                                               ratio=[0.9, 0.1],
                                               shuffle=True,
@@ -62,43 +71,39 @@ if __name__ == '__main__':
         datasets[key].apply(OnlyValidAccTransform())
 
     x_valid, y_valid = to_latent_feature_data(datasets['train'], -1)
+    loader = tf.data.Dataset.from_tensor_slices((x_valid, y_valid)).batch(batch_size=256)
 
     invalid = 0
     x = []
     y = []
-    for ly in y_valid:
+    for _, label_acc in loader:
         #try:
-        ops_idx, adj, latent = inverse_from_acc(model, 1, to_inv_acc=ly[-1])
-        true = model.encode(tf.constant([[x_valid[0]]]), training=False)
-        latent = tf.reshape(latent, (1, -1))
-        l = tf.keras.losses.MeanSquaredError()(true, latent)
-        ops = [OPS_by_IDX_201[i] for i in ops_idx]
-        #print(ops)
-        #print(adj)
+        ops_idx_lis, adj_list = inverse_from_acc(model, 1, to_inv_acc=label_acc[:, -1:])
+        for ops_idx, adj, query_acc in zip(ops_idx_lis, adj_list, label_acc[:, -1]):
+            try:
+                ops_str_list = [OPS_by_IDX_201[i] for i in ops_idx]
+                #print(adj)
+                arch_str = ops_list_to_nb201_arch_str(ops_str_list)
+                #print(arch_str)
 
-        arch_str = ops_list_to_nb201_arch_str(ops)
-        print(arch_str)
+                arch_idx = nb201api.query_index_by_arch(arch_str)
 
-        nb201api = create(None, 'tss', fast_mode=True, verbose=False)
-        idx = nb201api.query_index_by_arch(arch_str)
+                accumulate_acc = 0
+                acc_list = [float(query_acc)]
+                for seed in [777, 888]:
+                    data = nb201api.get_more_info(arch_idx, 'cifar10-valid', iepoch=199, hp='200', is_random=seed)
+                    accumulate_acc += data['valid-accuracy'] / 100.
+                    acc_list.append(data['valid-accuracy'] / 100.)
 
-        acc = 0
-        acc_l = [ly[-1]]
-        for seed in [777, 888]:
-            data = nb201api.get_more_info(idx, 'cifar10-valid', iepoch=199, hp='200', is_random=seed)
-            #print(data['valid-accuracy'])
-            acc += data['valid-accuracy'] / 100.
-            acc_l.append(data['valid-accuracy'])
+                    # data = nb201api.get_more_info(arch_idx, 'cifar10', iepoch=199, hp='200', is_random=seed)
+                    # print(data['test-accuracy'])
 
-            data = nb201api.get_more_info(idx, 'cifar10', iepoch=199, hp='200', is_random=seed)
-            #print(data['test-accuracy'])
-
-        acc /= 2
-        x.append(ly[-1])
-        y.append(acc)
-        print(acc_l)
-        #except:
-        #    invalid += 1
+                x.append(float(query_acc))
+                y.append(accumulate_acc / 2)
+                print(acc_list)  # [query_acc, 777_acc, 888_acc]
+            except:
+                print('invalid')
+                invalid += 1
     '''
     while to_inv_acc >= 0.60:
         for i in range(20):
@@ -133,5 +138,3 @@ if __name__ == '__main__':
     plt.xlim(0., 1.)
     plt.ylim(0., 1.)
     plt.show()
-
-
