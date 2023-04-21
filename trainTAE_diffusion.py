@@ -35,12 +35,16 @@ args = parser.parse_args()
 random_seed = 0
 tf.random.set_seed(random_seed)
 
+num_ops = 7
+num_nodes = 8
+num_adjs = 64
 
 class Trainer(tf.keras.Model):
     def __init__(self, model):
         super(Trainer, self).__init__()
         self.model = model
-        self.rec_loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)
+        self.ce_loss_fn = tf.keras.losses.CategoricalCrossentropy(from_logits=False)
+        self.sce_loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)
         self.noise_loss_fn = tf.keras.losses.MeanSquaredError()
 
     def train_step(self, data):
@@ -49,10 +53,16 @@ class Trainer(tf.keras.Model):
         non_nan_idx = tf.reshape(tf.where(~tf.math.is_nan(tf.reduce_sum(y_batch_train, axis=-1))), -1)
 
         with tf.GradientTape() as tape:
-            rec_logits, pred_noise, label_noise, kl_loss = self.model(x_batch_train, y_batch_train)  # Logits for this minibatch
+            ops_cls, adj_cls, pred_noise, label_noise, kl_loss = self.model(x_batch_train, y_batch_train)  # Logits for this minibatch
             noise_loss = self.noise_loss_fn(label_noise, pred_noise)
-            rec_loss = self.rec_loss_fn(x_batch_train, rec_logits)
+            ops_label = tf.reshape(x_batch_train[:, :num_ops*num_nodes], (tf.shape(x_batch_train)[0], num_nodes, num_ops))
+            adj_label = x_batch_train[:, num_ops*num_nodes:]
+            ops_loss = self.ce_loss_fn(ops_label, ops_cls)
+            adj_loss = self.sce_loss_fn(adj_label, adj_cls)
+            rec_loss = ops_loss + adj_loss + 0.1 * kl_loss
+
             loss = noise_loss + rec_loss + kl_loss
+
             #rec_loss = self.rec_loss_fn(x_batch_train, rec_logits)
             # To avoid nan loss when batch size is small
             # if tf.shape(non_nan_idx)[0] != 0:
@@ -60,16 +70,21 @@ class Trainer(tf.keras.Model):
         grads = tape.gradient(loss, self.model.trainable_weights)
         optimizer.apply_gradients(zip(grads, self.model.trainable_weights))
 
-        return {'loss': loss, 'rec_loss': rec_loss, 'noise_loss': noise_loss, 'kl_loss': kl_loss}
+        return {'loss': loss, 'rec_loss': rec_loss, 'ops_loss': ops_loss, 'adj_loss': adj_loss, 'kl_loss': kl_loss, 'noise_loss': noise_loss}
 
     def test_step(self, data):
         x_batch_train, y_batch_train = data
 
-        rec_logits, pred_noise, label_noise, kl_loss = self.model(x_batch_train, y_batch_train)  # Logits for this minibatch
+        ops_cls, adj_cls, pred_noise, label_noise, kl_loss = self.model(x_batch_train, y_batch_train)  # Logits for this minibatch
         noise_loss = self.noise_loss_fn(label_noise, pred_noise)
-        rec_loss = self.rec_loss_fn(x_batch_train, rec_logits)
-        loss = noise_loss + rec_loss + kl_loss
-        return {'loss': loss, 'rec_loss': rec_loss, 'noise_loss': noise_loss, 'kl_loss': kl_loss}
+        ops_label = tf.reshape(x_batch_train[:, :num_ops * num_nodes], (tf.shape(x_batch_train)[0], num_nodes, num_ops))
+        adj_label = x_batch_train[:, num_ops * num_nodes:]
+        ops_loss = self.ce_loss_fn(ops_label, ops_cls)
+        adj_loss = self.sce_loss_fn(adj_label, adj_cls)
+        rec_loss = ops_loss + adj_loss + kl_loss
+        loss = noise_loss + rec_loss + 0.1 * kl_loss
+        return {'loss': loss, 'rec_loss': rec_loss, 'ops_loss': ops_loss, 'adj_loss': adj_loss, 'kl_loss': kl_loss, 'noise_loss': noise_loss}
+
 
 if __name__ == '__main__':
     is_only_validation_data = True
@@ -88,7 +103,7 @@ if __name__ == '__main__':
     patience = 50
 
     # 15624
-    datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, hp=str(label_epochs), seed=777),
+    datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=1000, hp=str(label_epochs), seed=777),
                                               ratio=[0.9, 0.1],
                                               shuffle=True,
                                               shuffle_seed=0)
@@ -107,11 +122,11 @@ if __name__ == '__main__':
     x_valid, y_valid = to_latent_feature_data(datasets['valid'], -1)
 
     learning_rate = CustomSchedule(d_model)
-    optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9)
+    optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
 
     model = TransformerAutoencoderDiffusion(num_layers=num_layers, d_model=d_model, num_heads=num_heads, dff=dff,
-                                            input_size=input_size, diffusion_steps=diffusion_steps,
-                                            dropout_rate=dropout_rate)
+                                            input_size=input_size, num_ops=num_ops, num_nodes=num_nodes, num_adjs=num_adjs,
+                                            diffusion_steps=diffusion_steps, dropout_rate=dropout_rate)
 
     loader = {'train': tf.data.Dataset.from_tensor_slices((x_train, y_train)).shuffle(1024).batch(batch_size=batch_size).repeat(),
               'valid': tf.data.Dataset.from_tensor_slices((x_valid, y_valid)).batch(batch_size=batch_size)}
@@ -135,4 +150,4 @@ if __name__ == '__main__':
                            ]
                 )
 
-    model.save_weights(os.path.join(logdir, 'modelTAE_weights'))
+    model.save_weights(os.path.join(logdir, 'modelTAE_diffusion_weights'))
