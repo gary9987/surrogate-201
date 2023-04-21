@@ -384,7 +384,7 @@ def main(seed, train_sample_amount, valid_sample_amount, query_budget=100):
     is_only_validation_data = True
     label_epochs = 200
 
-    train_phase = [0, 1]  # 0 not train, 1 train
+    train_phase = [1, 1]  # 0 not train, 1 train
     pretrained_weight = 'logs/20230420-165707/modelGAE_weights_phase1'
 
     retrain_epochs = 20
@@ -399,7 +399,7 @@ def main(seed, train_sample_amount, valid_sample_amount, query_budget=100):
     latent_dim = 16
 
     train_epochs = 1000
-    patience = 200
+    patience = 100
 
     # 15624
     datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, hp=str(label_epochs), seed=False),
@@ -453,7 +453,7 @@ def main(seed, train_sample_amount, valid_sample_amount, query_budget=100):
                   'valid': BatchLoader(datasets['valid'], batch_size=batch_size, shuffle=False, epochs=train_epochs * 2),
                   'test': BatchLoader(datasets['test'], batch_size=batch_size, shuffle=False, epochs=1)}
         callbacks = [CSVLogger(os.path.join(logdir, "learning_curve_phase1.csv")),
-                     tf.keras.callbacks.ReduceLROnPlateau(monitor='val_rec_loss', factor=0.1, patience=100, verbose=1,
+                     tf.keras.callbacks.ReduceLROnPlateau(monitor='val_rec_loss', factor=0.1, patience=50, verbose=1,
                                                           min_lr=1e-5),
                      tensorboard_callback,
                      EarlyStopping(monitor='val_rec_loss', patience=patience, restore_best_weights=True)]
@@ -494,7 +494,7 @@ def main(seed, train_sample_amount, valid_sample_amount, query_budget=100):
 
         callbacks = [CSVLogger(os.path.join(logdir, f"learning_curve_phase2.csv")),
                      tensorboard_callback,
-                     tf.keras.callbacks.ReduceLROnPlateau(monitor='val_total_loss', factor=0.1, patience=100, verbose=1,
+                     tf.keras.callbacks.ReduceLROnPlateau(monitor='val_total_loss', factor=0.1, patience=50, verbose=1,
                                                           min_lr=1e-5),
                      EarlyStopping(monitor='val_total_loss', patience=patience, restore_best_weights=True)]
         trainer = train(2, model, loader, 20, logdir, callbacks,
