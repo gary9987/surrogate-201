@@ -314,7 +314,7 @@ def retrain(trainer, datasets, batch_size, train_epochs, logdir, top_list, logge
 
     # Select top-5 to evaluate true label and add to training dataset
     top_acc_list = []
-    found_arch_list_set = sorted(found_arch_list_set, key=lambda x: x['y'], reverse=True)[:20]
+    found_arch_list_set = sorted(found_arch_list_set, key=lambda x: x['y'], reverse=True)[:5]
     for idx, i in enumerate(found_arch_list_set):
         acc = query_acc_by_ops(i['x'])
         top_acc_list.append(acc)
@@ -324,27 +324,28 @@ def retrain(trainer, datasets, batch_size, train_epochs, logdir, top_list, logge
     logger.info(f'Avg found acc {sum(top_acc_list) / len(top_acc_list)}')
     logger.info(f'Best found acc {max(top_acc_list)}')
 
-    train_dict = {str(i.x.tolist()): i.y.tolist() for i in datasets['train']}
+    train_dict = {str(i.x.tolist()): i.y.tolist() for i in datasets['train'].graphs}
 
     # Add top found architecture to training dataset
     for i in found_arch_list_set:
         if str(i['x'].tolist()) in train_dict:
-            if i['x'].tolist() not in top_list and train_dict[str(i['x'].tolist())] == [np.nan]:
+            if i['x'].tolist() not in top_list and np.isnan(train_dict[str(i['x'].tolist())]):
                 datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * repeat)
                 top_list.append(i['x'].tolist())
-                logger.info(f'Data not in training set {i["y"].tolist()}')
+                logger.info(f'Data not in train and not in top_list {i["y"].tolist()}')
                 num_new_found += 1
-            elif i['x'].tolist() not in top_list and train_dict[str(i['x'].tolist())] != [np.nan]:
-                logger.info(f'Data already in training set {i["y"].tolist()}')
-                #datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * 10)
+            elif i['x'].tolist() not in top_list and not np.isnan(train_dict[str(i['x'].tolist())]):
+                logger.info(f'Data in train but not in top_list {i["y"].tolist()}')
+                # datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * 10)
                 top_list.append(i['x'].tolist())
+            else:
+                logger.info(f'Data in train and in top_list {i["y"].tolist()}')
         else:
             if i['x'].tolist() not in top_list:
                 logger.info(f'Data not in train and not in top_list {i["y"].tolist()}')
                 datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * repeat)
                 top_list.append(i['x'].tolist())
                 num_new_found += 1
-
 
     logger.info(f'{datasets["train"]}')
     logger.info(f'Length of top_list {len(top_list)}')
@@ -367,14 +368,7 @@ def retrain(trainer, datasets, batch_size, train_epochs, logdir, top_list, logge
 
     results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
     logger.info(str(dict(zip(trainer.metrics_names, results))))
-    '''
-    invalid, avg_acc, best_acc, found_arch_list = eval_query_best(trainer.model, trainer.x_dim,
-                                                                  trainer.z_dim, query_amount=10)
-    logger.info('After retrain')
-    logger.info(f'Number of invalid decode {invalid}')
-    logger.info(f'Avg found acc {avg_acc}')
-    logger.info(f'Best found acc {best_acc}')
-    '''
+
     return top_acc_list, found_arch_list_set, num_new_found
 
 
