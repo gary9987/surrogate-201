@@ -114,8 +114,8 @@ class Trainer2(tf.keras.Model):
         # For rev loss weight
         self.w3 = 10.
 
-        #self.reg_loss_fn = tf.keras.losses.MeanSquaredError()
-        self.reg_loss_fn = weighted_mse
+        self.reg_loss_fn = tf.keras.losses.MeanSquaredError()
+        #self.reg_loss_fn = weighted_mse
         self.loss_latent = MMD_multiscale
         self.loss_backward = MSE
         self.loss_tracker = {
@@ -396,6 +396,7 @@ def main(seed, train_sample_amount, valid_sample_amount, query_budget=100):
     num_layers = 3
     num_heads = 3
     finetune = True
+    retrain_finetune = True
     latent_dim = 16
 
     train_epochs = 1000
@@ -497,17 +498,17 @@ def main(seed, train_sample_amount, valid_sample_amount, query_budget=100):
                      tf.keras.callbacks.ReduceLROnPlateau(monitor='val_total_loss', factor=0.1, patience=50, verbose=1,
                                                           min_lr=1e-5),
                      EarlyStopping(monitor='val_total_loss', patience=patience, restore_best_weights=True)]
-        trainer = train(2, model, loader, 20, logdir, callbacks,
+        trainer = train(2, model, loader, train_epochs, logdir, callbacks,
                         x_dim=x_dim, y_dim=y_dim, z_dim=z_dim, finetune=finetune)
         results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
         logger.info(str(dict(zip(trainer.metrics_names, results))))
-        #trainer = Trainer2(model, x_dim, y_dim, z_dim, finetune=finetune)
-        #trainer.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3))
-        del trainer
-        tf.keras.backend.clear_session()
 
-        trainer = Trainer2(model, x_dim, y_dim, z_dim, finetune=False)
-        trainer.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3))
+        if not retrain_finetune:
+            del trainer
+            tf.keras.backend.clear_session()
+            trainer = Trainer2(model, x_dim, y_dim, z_dim, finetune=retrain_finetune)
+            trainer.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3))
+
         # Reset the lr for retrain
         tf.keras.backend.set_value(trainer.optimizer.learning_rate, 1e-3)
         top_list = []
@@ -517,7 +518,7 @@ def main(seed, train_sample_amount, valid_sample_amount, query_budget=100):
             logger.info(f'Retrain run {run}')
             top_acc_list, top_arch_list, num_new_found = retrain(trainer, datasets, batch_size, retrain_epochs, logdir, top_list, logger, repeat_label)
             now_queried += num_new_found
-            if now_queried >= query_budget:
+            if now_queried > query_budget:
                 break
             global_top_acc_list += top_acc_list
             global_top_arch_list += top_arch_list
