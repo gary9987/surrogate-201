@@ -20,7 +20,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--train_sample_amount', type=int, default=350, help='Number of samples to train (default: 350)')
     parser.add_argument('--valid_sample_amount', type=int, default=50, help='Number of samples to train (default: 50)')
-    parser.add_argument('--query_budget', type=int, default=200)
+    parser.add_argument('--query_budget', type=int, default=450)
     parser.add_argument('--seed', type=int, default=0)
     return parser.parse_args()
 
@@ -145,8 +145,6 @@ class Trainer2(tf.keras.Model):
         return reg_loss, latent_loss
 
     def cal_rev_loss(self, undirected_x_batch_train, y, z, nan_mask, noise_scale):
-        self.model.encoder.trainable = False
-        self.model.decoder.trainable = False
         y = tf.dynamic_partition(y, nan_mask, 2)[0]
         z = tf.dynamic_partition(z, nan_mask, 2)[0]
         y = y + noise_scale * tf.random.normal(shape=tf.shape(y), dtype=tf.float32)
@@ -174,7 +172,7 @@ class Trainer2(tf.keras.Model):
             # The operations that the layer applies
             # to its inputs are going to be recorded
             # on the GradientTape.
-            ops_cls, adj_cls, kl_loss, y_out, x_encoding = self.model(undirected_x_batch_train, training=False)
+            ops_cls, adj_cls, kl_loss, y_out, x_encoding = self.model(undirected_x_batch_train, training=True)
 
             # To avoid nan loss when batch size is small
             reg_loss, latent_loss = tf.cond(tf.shape(nan_mask)[0] != 0,
@@ -205,6 +203,8 @@ class Trainer2(tf.keras.Model):
 
         # Backward loss
         with tf.GradientTape() as tape:
+            self.model.encoder.trainable = False
+            self.model.decoder.trainable = False
             # To avoid nan loss when batch size is small
             rev_loss = tf.cond(tf.shape(nan_mask)[0] != 0,
                                lambda: self.cal_rev_loss(undirected_x_batch_train, y, z, nan_mask, 0.0001),
@@ -372,6 +372,28 @@ def retrain(trainer, datasets, batch_size, train_epochs, logdir, top_list, logge
     return top_acc_list, found_arch_list_set, num_new_found
 
 
+def prepare_model(nvp_config, latent_dim, num_layers, d_model, num_heads, dff, num_ops, num_nodes, num_adjs, dropout_rate, eps_scale):
+    pretrained_model = GraphAutoencoder(latent_dim=latent_dim, num_layers=num_layers,
+                                        d_model=d_model, num_heads=num_heads,
+                                        dff=dff, num_ops=num_ops, num_nodes=num_nodes,
+                                        num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=eps_scale)
+    pretrained_model((tf.random.normal(shape=(1, num_nodes, num_ops)), tf.random.normal(shape=(1, num_nodes, num_nodes))))
+
+    model = GraphAutoencoderNVP(nvp_config=nvp_config, latent_dim=latent_dim, num_layers=num_layers,
+                                d_model=d_model, num_heads=num_heads,
+                                dff=dff, num_ops=num_ops, num_nodes=num_nodes,
+                                num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=eps_scale)
+    model((tf.random.normal(shape=(1, num_nodes, num_ops)), tf.random.normal(shape=(1, num_nodes, num_nodes))))
+
+    retrain_model = GraphAutoencoderNVP(nvp_config=nvp_config, latent_dim=latent_dim, num_layers=num_layers,
+                                        d_model=d_model, num_heads=num_heads,
+                                        dff=dff, num_ops=num_ops, num_nodes=num_nodes,
+                                        num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=eps_scale)
+    retrain_model((tf.random.normal(shape=(1, num_nodes, num_ops)), tf.random.normal(shape=(1, num_nodes, num_nodes))))
+
+    return pretrained_model, model, retrain_model
+
+
 def main(seed, train_sample_amount, valid_sample_amount, query_budget=100):
     logdir, logger = get_logdir_and_logger(f'trainGAE_two_phase_{seed}.log')
     random_seed = seed
@@ -430,19 +452,9 @@ def main(seed, train_sample_amount, valid_sample_amount, query_budget=100):
         'name': 'NVP',
         'inp_dim': tot_dim
     }
-    pretrained_model = GraphAutoencoder(latent_dim=latent_dim, num_layers=num_layers,
-                                        d_model=d_model, num_heads=num_heads,
-                                        dff=dff, num_ops=num_ops, num_nodes=num_nodes,
-                                        num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=eps_scale)
-    pretrained_model(
-        (tf.random.normal(shape=(1, num_nodes, num_ops)), tf.random.normal(shape=(1, num_nodes, num_nodes))))
 
-
-    model = GraphAutoencoderNVP(nvp_config=nvp_config, latent_dim=latent_dim, num_layers=num_layers,
-                                d_model=d_model, num_heads=num_heads,
-                                dff=dff, num_ops=num_ops, num_nodes=num_nodes,
-                                num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=eps_scale)
-    model((tf.random.normal(shape=(1, num_nodes, num_ops)), tf.random.normal(shape=(1, num_nodes, num_nodes))))
+    pretrained_model, model, retrain_model = prepare_model(nvp_config, latent_dim, num_layers, d_model, num_heads, dff,
+                                                           num_ops, num_nodes, num_adjs, dropout_rate, eps_scale)
     model.summary(print_fn=logger.info)
 
     tensorboard_callback = tf.keras.callbacks.TensorBoard(logdir, histogram_freq=1)
@@ -473,7 +485,7 @@ def main(seed, train_sample_amount, valid_sample_amount, query_budget=100):
     global_top_arch_list = []
     if train_phase[1]:
         batch_size = 256
-        repeat_label = 80
+        repeat_label = 20
         now_queried = train_sample_amount + valid_sample_amount
         logger.info('Train phase 2')
         '''
@@ -503,14 +515,12 @@ def main(seed, train_sample_amount, valid_sample_amount, query_budget=100):
         results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
         logger.info(str(dict(zip(trainer.metrics_names, results))))
 
-        if not retrain_finetune:
-            del trainer
-            tf.keras.backend.clear_session()
-            trainer = Trainer2(model, x_dim, y_dim, z_dim, finetune=retrain_finetune)
-            trainer.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3))
+        # Recreate Trainer for retrain
+        retrain_model.set_weights(model.get_weights())
+        trainer = Trainer2(retrain_model, x_dim, y_dim, z_dim, finetune=retrain_finetune)
+        trainer.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3), run_eagerly=False)
 
         # Reset the lr for retrain
-        tf.keras.backend.set_value(trainer.optimizer.learning_rate, 1e-3)
         top_list = []
         run = 0
         while now_queried < query_budget:
@@ -522,8 +532,6 @@ def main(seed, train_sample_amount, valid_sample_amount, query_budget=100):
                 break
             global_top_acc_list += top_acc_list
             global_top_arch_list += top_arch_list
-            #if run % 5 == 0:
-            #    trainer.model.save_weights(os.path.join(logdir, f'modelGAE_retrain_weights_{run}'))
             run += 1
     else:
         model.load_weights(pretrained_weight)
