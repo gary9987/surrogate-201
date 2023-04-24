@@ -42,7 +42,6 @@ class GINEncoder(Model):
         self.graph_conv = GINConvBatch(n_hidden, mlp_hidden=mlp_hidden, mlp_activation=activation, mlp_batchnorm=True,
                                        activation=activation)
         self.bn = tensorflow.keras.layers.BatchNormalization()
-        #self.pool = GlobalAvgPool()
         self.dropout = tensorflow.keras.layers.Dropout(dropout)
         self.mean = Dense(n_hidden)
         self.var = Dense(n_hidden)
@@ -50,7 +49,6 @@ class GINEncoder(Model):
     def call(self, inputs):
         out = self.graph_conv(inputs)
         out = self.bn(out)
-        #out = self.pool(out)
         out = self.dropout(out)
         mean = self.mean(out)
         var = self.var(out)

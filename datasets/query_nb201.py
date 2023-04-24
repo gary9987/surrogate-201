@@ -49,6 +49,7 @@ def convert_arch_str_to_martrix_ops(arch_str: str) -> Tuple[np.ndarray, List[str
 
 
 if __name__ == '__main__':
+    # optimal valid 91.60666665039064
     output_dir = '../nb201_query_data'
     Path(output_dir).mkdir(exist_ok=True)
 
