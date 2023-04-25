@@ -110,6 +110,9 @@ def eval_query_best(model: tf.keras.Model, dataset_name, x_dim: int, z_dim: int,
     plt.xlim(0.85, 1.2)
     plt.ylim(0.85, 1.2)
     plt.savefig('top.png')
+    if len(y) == 0:
+        return invalid, 0, 0, found_arch_list
+
     return invalid, sum(y) / len(y), max(y), found_arch_list
 
 
@@ -148,8 +151,8 @@ if __name__ == '__main__':
                                 num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=0.)
     model((tf.random.normal(shape=(1, num_nodes, num_ops)), tf.random.normal(shape=(1, num_nodes, num_nodes))))
     # model.load_weights('logs/phase2_model/modelTAE_weights_phase2')
-    model.load_weights('logs/20230420-053812/modelGAE_weights_phase2')
-    datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, hp=str(200), seed=777),
+    model.load_weights('logs/20230425-162536/modelGAE_weights_phase2')
+    datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, dataset=dataset, hp=str(200), seed=False),
                                               ratio=[0.8, 0.1, 0.1],
                                               shuffle=True,
                                               shuffle_seed=0)
@@ -179,8 +182,8 @@ if __name__ == '__main__':
                 arch_idx = nb201api.query_index_by_arch(arch_str)
 
                 acc_list = [float(query_acc)]
-                data = nb201api.get_more_info(arch_idx, 'cifar10-valid', iepoch=199, hp='200', is_random=False)
-                acc = data['valid-accuracy'] / 100.
+                data = nb201api.query_meta_info_by_index(arch_idx, hp='200').get_metrics(dataset, 'x-valid', iepoch=None, is_random=False)
+                acc = data['accuracy'] / 100.
 
                 x.append(float(query_acc))
                 y.append(acc)
@@ -240,9 +243,10 @@ if __name__ == '__main__':
 
             idx = nb201api.query_index_by_arch(arch_str)
 
-            data = nb201api.get_more_info(idx, 'cifar10-valid', iepoch=199, hp='200', is_random=False)
-            print(data['valid-accuracy'])
-            acc = data['valid-accuracy'] / 100
+            data = nb201api.query_meta_info_by_index(idx, hp='200').get_metrics(dataset, 'x-valid', iepoch=None,
+                                                                                     is_random=False)
+            acc = data['accuracy'] / 100.
+            print(data['accuracy'])
             x.append(query_acc)
             y.append(acc)
         except:
