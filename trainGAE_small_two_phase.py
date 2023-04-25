@@ -1,19 +1,17 @@
 import argparse
 import random
-import numpy as np
 from tensorflow.python.keras.callbacks import CSVLogger, EarlyStopping
 from datasets.transformation import ReshapeYTransform, OnlyValidAccTransform, OnlyFinalAcc, LabelScale
-from invertible_neural_networks.flow import MSE, MMD_multiscale
+from invertible_neural_networks.flow import MMD_multiscale
 from models.GNN_small import GraphAutoencoderNVPSmall, GraphAutoEncoderSmall
 from models.GNN import GraphAutoencoder, get_rank_weight
 import tensorflow as tf
 import os
 from datasets.nb201_dataset import NasBench201Dataset
 from datasets.utils import train_valid_test_split_dataset, mask_graph_dataset
-from spektral.data import BatchLoader
-from evalGAE import eval_query_best, query_acc_by_ops
+from evalGAE import query_acc_by_ops
+from trainGAE_two_phase import to_loader, retrain
 from utils.py_utils import get_logdir_and_logger
-from spektral.data import Graph
 
 
 def parse_args():
@@ -292,95 +290,6 @@ def train(phase: int, model, loader, train_epochs, logdir, callbacks=None, x_dim
     return trainer
 
 
-def to_loader(datasets, batch_size: int, epochs: int):
-    loader = {}
-    for key, value in datasets.items():
-        if key != 'test':
-            loader[key] = BatchLoader(value, batch_size=batch_size, shuffle=True, epochs=epochs*2)
-        else:
-            loader[key] = BatchLoader(value, batch_size=batch_size, shuffle=False, epochs=1)
-
-    return loader
-
-
-def retrain(trainer, datasets, batch_size, train_epochs, logdir, top_list, logger, repeat):
-    # Generate total 200 architectures
-    _, _, _, found_arch_list = eval_query_best(trainer.model, trainer.x_dim,
-                                               trainer.z_dim, query_amount=100, version=1)
-    _, _, _, found_arch_list2 = eval_query_best(trainer.model, trainer.x_dim, trainer.z_dim,
-                                                query_amount=100, noise_scale=0.05, version=1)
-    num_new_found = 0
-    found_arch_list_set = []
-    visited = []
-    found_arch_list.extend(found_arch_list2)
-    for i in found_arch_list:
-        if str(i['x'].tolist()) not in visited:
-            found_arch_list_set.append(i)
-            visited.append(str(i['x'].tolist()))
-
-    # Predict accuracy by INN (performance predictor)
-    for idx, i in enumerate(found_arch_list_set):
-        _, _, _, reg, _ = trainer.model((tf.constant([i['x']]), tf.constant([i['a']])), training=False)
-        found_arch_list_set[idx]['y'] = reg[0][-1].numpy()
-
-    # Select top-5 to evaluate true label and add to training dataset
-    top_acc_list = []
-    found_arch_list_set = sorted(found_arch_list_set, key=lambda x: x['y'], reverse=True)[:5]
-    for idx, i in enumerate(found_arch_list_set):
-        acc = query_acc_by_ops(i['x'])
-        top_acc_list.append(acc)
-        found_arch_list_set[idx]['y'] = np.array([acc])
-
-    logger.info('Top acc list: {}'.format(top_acc_list))
-    logger.info(f'Avg found acc {sum(top_acc_list) / len(top_acc_list)}')
-    logger.info(f'Best found acc {max(top_acc_list)}')
-
-    train_dict = {str(i.x.tolist()): i.y.tolist() for i in datasets['train'].graphs}
-
-    # Add top found architecture to training dataset
-    for i in found_arch_list_set:
-        if str(i['x'].tolist()) in train_dict:
-            if i['x'].tolist() not in top_list and np.isnan(train_dict[str(i['x'].tolist())]):
-                datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * repeat)
-                top_list.append(i['x'].tolist())
-                logger.info(f'Data not in train and not in top_list {i["y"].tolist()}')
-                num_new_found += 1
-            elif i['x'].tolist() not in top_list and not np.isnan(train_dict[str(i['x'].tolist())]):
-                logger.info(f'Data in train but not in top_list {i["y"].tolist()}')
-                # datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * 10)
-                top_list.append(i['x'].tolist())
-            else:
-                logger.info(f'Data in train and in top_list {i["y"].tolist()}')
-        else:
-            if i['x'].tolist() not in top_list:
-                logger.info(f'Data not in train and not in top_list {i["y"].tolist()}')
-                datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * repeat)
-                top_list.append(i['x'].tolist())
-                num_new_found += 1
-
-    logger.info(f'{datasets["train"]}')
-    logger.info(f'Length of top_list {len(top_list)}')
-
-    loader = to_loader(datasets, batch_size, train_epochs)
-    callbacks = [CSVLogger(os.path.join(logdir, f"learning_curve_phase2_retrain.csv")),
-                 #tf.keras.callbacks.ReduceLROnPlateau(monitor='val_total_loss', factor=0.1, patience=15, verbose=1,
-                 #                                     min_lr=1e-6),
-                 EarlyStopping(monitor='val_total_loss', patience=15, restore_best_weights=True)]
-
-    #tf.keras.backend.set_value(trainer.optimizer.learning_rate, 1e-3)
-    trainer.fit(loader['train'].load(),
-                validation_data=loader['valid'].load(),
-                epochs=train_epochs,
-                callbacks=callbacks,
-                steps_per_epoch=loader['train'].steps_per_epoch,
-                validation_steps=loader['valid'].steps_per_epoch)
-
-    results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
-    logger.info(str(dict(zip(trainer.metrics_names, results))))
-
-    return top_acc_list, found_arch_list_set, num_new_found
-
-
 def prepare_model(nvp_config, latent_dim, num_layers, d_model, num_heads, dff, num_ops, num_nodes, num_adjs, dropout_rate, eps_scale):
     pretrained_model = GraphAutoEncoderSmall(latent_dim=latent_dim, num_layers=num_layers,
                                         d_model=d_model, num_heads=num_heads,
@@ -403,7 +312,7 @@ def prepare_model(nvp_config, latent_dim, num_layers, d_model, num_heads, dff, n
     return pretrained_model, model, retrain_model
 
 
-def main(seed, train_sample_amount, valid_sample_amount, query_budget=100):
+def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_budget=100):
     logdir, logger = get_logdir_and_logger(f'trainGAE_small_two_phase_{seed}.log')
     random_seed = seed
     tf.random.set_seed(random_seed)
@@ -434,7 +343,7 @@ def main(seed, train_sample_amount, valid_sample_amount, query_budget=100):
     patience = 100
 
     # 15624
-    datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, hp=str(label_epochs), seed=False),
+    datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, dataset=dataset_name, hp=str(label_epochs), seed=False),
                                               ratio=[0.8, 0.1, 0.1],
                                               shuffle=True,
                                               shuffle_seed=0)
@@ -519,7 +428,8 @@ def main(seed, train_sample_amount, valid_sample_amount, query_budget=100):
         while now_queried < query_budget:
             logger.info('')
             logger.info(f'Retrain run {run}')
-            top_acc_list, top_arch_list, num_new_found = retrain(trainer, datasets, batch_size, retrain_epochs, logdir, top_list, logger, repeat_label)
+            top_acc_list, top_arch_list, num_new_found = retrain(trainer, datasets, dataset_name, batch_size,
+                                                                 retrain_epochs, logdir, top_list, logger, repeat_label)
             now_queried += num_new_found
             if now_queried > query_budget:
                 break

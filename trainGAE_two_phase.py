@@ -9,7 +9,7 @@ from models.TransformerAE import TransformerAutoencoderNVP
 import tensorflow as tf
 import os
 from datasets.nb201_dataset import NasBench201Dataset
-from datasets.utils import train_valid_test_split_dataset, mask_graph_dataset
+from datasets.utils import train_valid_test_split_dataset, mask_graph_dataset, arch_list_to_set
 from spektral.data import BatchLoader
 from evalGAE import eval_query_best, query_acc_by_ops
 from utils.py_utils import get_logdir_and_logger
@@ -294,36 +294,36 @@ def to_loader(datasets, batch_size: int, epochs: int):
     return loader
 
 
-def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, top_list, logger, repeat):
+def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, top_list, logger, repeat, top_k=5):
     # Generate total 200 architectures
     _, _, _, found_arch_list = eval_query_best(trainer.model, dataset_name, trainer.x_dim, trainer.z_dim, query_amount=100)
     _, _, _, found_arch_list2 = eval_query_best(trainer.model, dataset_name, trainer.x_dim,
                                                 trainer.z_dim, query_amount=100, noise_scale=0.05)
     num_new_found = 0
-    found_arch_list_set = []
-    visited = []
     found_arch_list.extend(found_arch_list2)
-    for i in found_arch_list:
-        if str(i['x'].tolist()) not in visited:
-            found_arch_list_set.append(i)
-            visited.append(str(i['x'].tolist()))
+    found_arch_list_set = arch_list_to_set(found_arch_list)
 
     # Predict accuracy by INN (performance predictor)
-    for idx, i in enumerate(found_arch_list_set):
-        _, _, _, reg, _ = trainer.model((tf.constant([i['x']]), tf.constant([i['a']])), training=False)
-        found_arch_list_set[idx]['y'] = reg[0][-1].numpy()
+    x = tf.stack([tf.constant(i['x']) for i in found_arch_list_set])
+    a = tf.stack([tf.constant(i['a']) for i in found_arch_list_set])
+    _, _, _, reg, _ = trainer.model((x, a), training=False)
+    for i in range(len(found_arch_list_set)):
+        found_arch_list_set[i]['y'] = reg[i][-1].numpy()
 
-    # Select top-5 to evaluate true label and add to training dataset
+    # Select top-k to evaluate true label and add to training dataset
     top_acc_list = []
-    found_arch_list_set = sorted(found_arch_list_set, key=lambda x: x['y'], reverse=True)[:5]
+    found_arch_list_set = sorted(found_arch_list_set, key=lambda g: g['y'], reverse=True)[:top_k]
     for idx, i in enumerate(found_arch_list_set):
         acc = query_acc_by_ops(i['x'], dataset_name)
         top_acc_list.append(acc)
         found_arch_list_set[idx]['y'] = np.array([acc])
 
-    logger.info('Top acc list: {}'.format(top_acc_list))
-    logger.info(f'Avg found acc {sum(top_acc_list) / len(top_acc_list)}')
-    logger.info(f'Best found acc {max(top_acc_list)}')
+    if len(top_acc_list) != 0:
+        logger.info('Top acc list: {}'.format(top_acc_list))
+        logger.info(f'Avg found acc {sum(top_acc_list) / len(top_acc_list)}')
+        logger.info(f'Best found acc {max(top_acc_list)}')
+    else:
+        logger.info('Top acc list is [] in this run')
 
     train_dict = {str(i.x.tolist()): i.y.tolist() for i in datasets['train'].graphs}
 
@@ -399,14 +399,15 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     tf.random.set_seed(random_seed)
     random.seed(random_seed)
 
+    top_k = 10
     num_ops = 7
     num_nodes = 8
     num_adjs = 64
     is_only_validation_data = True
     label_epochs = 200
 
-    train_phase = [1, 1]  # 0 not train, 1 train
-    pretrained_weight = 'logs/20230420-165707/modelGAE_weights_phase1'
+    train_phase = [0, 1]  # 0 not train, 1 train
+    pretrained_weight = 'logs/phase1_model_cifar100/modelGAE_weights_phase1'
 
     retrain_epochs = 20
 
@@ -515,7 +516,9 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         while now_queried < query_budget:
             logger.info('')
             logger.info(f'Retrain run {run}')
-            top_acc_list, top_arch_list, num_new_found = retrain(trainer, datasets, dataset_name, batch_size, retrain_epochs, logdir, top_list, logger, repeat_label)
+            top_acc_list, top_arch_list, num_new_found = retrain(trainer, datasets, dataset_name, batch_size,
+                                                                 retrain_epochs, logdir, top_list, logger,
+                                                                 repeat_label, top_k)
             now_queried += num_new_found
             if now_queried > query_budget:
                 break

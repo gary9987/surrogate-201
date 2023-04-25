@@ -147,3 +147,12 @@ def mask_graph_dataset(graph_dataset, reg_size: int, non_nan_repeat: int, random
 
     return graph_dataset
 
+
+def arch_list_to_set(arch_list):
+    arch_list_set = []
+    visited = []
+    for i in arch_list:
+        if str(i['x'].tolist()) not in visited:
+            arch_list_set.append(i)
+            visited.append(str(i['x'].tolist()))
+    return arch_list_set
