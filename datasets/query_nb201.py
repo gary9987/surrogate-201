@@ -1,7 +1,6 @@
 import os.path
 import pickle
 from typing import List, Tuple
-
 from nats_bench import create
 import numpy as np
 from pathlib import Path
@@ -49,8 +48,10 @@ def convert_arch_str_to_martrix_ops(arch_str: str) -> Tuple[np.ndarray, List[str
 
 
 if __name__ == '__main__':
-    # optimal valid 91.60666665039064
-    output_dir = '../nb201_query_data'
+    # cifar10 optimal valid 91.60666665039064
+
+    on_dataset = 'cifar10-valid'  # cifar10-valid cifar100 ImageNet16-120
+    output_dir = os.path.join('../nb201_query_data', on_dataset)
     Path(output_dir).mkdir(exist_ok=True)
 
     hp = '200'  # can be 12 or 200 for cifar-10
@@ -60,11 +61,12 @@ if __name__ == '__main__':
     if hp == '12':
         seed_list = [111, 777]
     elif hp == '200':
-        seed_list = [777, 888, False] # 999
+        #seed_list = [777, 888, False] # 999
+        seed_list = [False]
 
+    # Create the API instance for the topology search space in NATS
+    api = create(None, 'tss', fast_mode=True, verbose=False)
     for is_random in seed_list:
-        # Create the API instance for the topology search space in NATS
-        api = create(None, 'tss', fast_mode=True, verbose=False)
         final = []
         metrics = [
             'train-accuracy',
@@ -80,22 +82,25 @@ if __name__ == '__main__':
             print('start model NO. {}'.format(idx))
             record = {metric: [] for metric in metrics}
 
-            arch = api.query_meta_info_by_index(idx, hp=hp)
-            total_train_epo = arch.get_total_epoch('cifar10-valid')  # 12 for cifar10 training
+            arch_meta_info = api.query_meta_info_by_index(idx, hp=hp)
+            total_train_epo = arch_meta_info.get_total_epoch(on_dataset)  # 12 for cifar10 training
 
             for epoch in range(total_train_epo):
                 try:
-                    info = api.get_more_info(idx, 'cifar10-valid', iepoch=epoch, hp=hp, is_random=is_random)
+                    metric = arch_meta_info.get_metrics(on_dataset, 'train', iepoch=epoch, is_random=is_random)
+                    record['train-accuracy'].append(metric['accuracy'])
+                    record['train-loss'].append(metric['loss'])
+                    if on_dataset != 'cifar10-valid':
+                        epoch = None
+                    metric = arch_meta_info.get_metrics(on_dataset, 'x-valid', iepoch=epoch, is_random=is_random)
+                    record['valid-accuracy'].append(metric['accuracy'])
+                    record['valid-loss'].append(metric['loss'])
                     count += 1
-                    for metric in metrics:
-                        record[metric].append(info[metric])
                 except:
                     print(f'no data for idx {idx}')
                     break
 
-            #arch_str = api.query_info_str_by_arch(idx)
-            arch_str = api.query_meta_info_by_index(idx).arch_str
-            adj_matrix, ops_list = convert_arch_str_to_martrix_ops(arch_str)
+            adj_matrix, ops_list = convert_arch_str_to_martrix_ops(arch_meta_info.arch_str)
             final.append([adj_matrix, ops_list, record])
 
         print(f'count = {count / total_train_epo}')

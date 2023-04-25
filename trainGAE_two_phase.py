@@ -18,9 +18,10 @@ from spektral.data import Graph
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--train_sample_amount', type=int, default=350, help='Number of samples to train (default: 350)')
+    parser.add_argument('--train_sample_amount', type=int, default=250, help='Number of samples to train (default: 250)')
     parser.add_argument('--valid_sample_amount', type=int, default=50, help='Number of samples to train (default: 50)')
-    parser.add_argument('--query_budget', type=int, default=450)
+    parser.add_argument('--query_budget', type=int, default=400)
+    parser.add_argument('--dataset', type=str, default='cifar10-valid')
     parser.add_argument('--seed', type=int, default=0)
     return parser.parse_args()
 
@@ -392,7 +393,7 @@ def prepare_model(nvp_config, latent_dim, num_layers, d_model, num_heads, dff, n
     return pretrained_model, model, retrain_model
 
 
-def main(seed, train_sample_amount, valid_sample_amount, query_budget=100):
+def main(seed, dataset, train_sample_amount, valid_sample_amount, query_budget):
     logdir, logger = get_logdir_and_logger(f'trainGAE_two_phase_{seed}.log')
     random_seed = seed
     tf.random.set_seed(random_seed)
@@ -423,7 +424,8 @@ def main(seed, train_sample_amount, valid_sample_amount, query_budget=100):
     patience = 100
 
     # 15624
-    datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, hp=str(label_epochs), seed=False),
+    datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, dataset=dataset,
+                                                                 hp=str(label_epochs), seed=False),
                                               ratio=[0.8, 0.1, 0.1],
                                               shuffle=True,
                                               shuffle_seed=0)
@@ -539,4 +541,4 @@ def main(seed, train_sample_amount, valid_sample_amount, query_budget=100):
 
 if __name__ == '__main__':
     args = parse_args()
-    main(args.seed, args.train_sample_amount, args.valid_sample_amount, args.query_budget)
+    main(args.seed, args.dataset, args.train_sample_amount, args.valid_sample_amount, args.query_budget)

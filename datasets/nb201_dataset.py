@@ -29,9 +29,9 @@ def convert_matrix_ops_to_graph(matrix, ops):
     return spektral.data.Graph(x=x, a=a)
 
 
-def transform_nb201_to_graph(records: dict, hp: str, seed: int):
-    file_path = f'../NasBench201Dataset/NasBench201Dataset_hp{hp}_seed{seed}'
-    Path(file_path).mkdir(exist_ok=True)
+def transform_nb201_to_graph(records: dict, hp: str, seed: int, dataset: str):
+    file_path = f'../NasBench201Dataset/{dataset}/NasBench201Dataset_hp{hp}_seed{seed}'
+    Path(file_path).mkdir(exist_ok=True, parents=True)
 
     for record, no in zip(records, range(len(records))):
 
@@ -61,16 +61,17 @@ def transform_nb201_to_graph(records: dict, hp: str, seed: int):
         
 
 class NasBench201Dataset(Dataset):
-    def __init__(self, start: int, end: int, hp: str, seed: Union[int, bool], root='', **kwargs):
+    def __init__(self, start: int, end: int, hp: str, seed: Union[int, bool], dataset='cifar10-valid', root='', **kwargs):
         """
         :param start:
         :param end:
         :param hp: 12 or 200 to set using 12 or 200 epochs dataset
         :param seed: if seed is False, will use average of all available trails
+        :param dataset: 'cifar10-valid' or 'cifar100' or 'ImageNet16-120'
         :param root:
         :param kwargs:
         """
-        self.file_path = os.path.join(root, 'NasBench201Dataset', f'NasBench201Dataset_hp{hp}_seed{seed}')
+        self.file_path = os.path.join(root, 'NasBench201Dataset', dataset, f'NasBench201Dataset_hp{hp}_seed{seed}')
         self.start = start
         self.end = end
         super().__init__(**kwargs)
@@ -106,19 +107,22 @@ class NasBench201Dataset(Dataset):
 
 if __name__ == '__main__':
     hp = '200' # hp = 12 or 200
+    datasets = ['cifar10-valid', 'cifar100', 'ImageNet16-120'] # cifar10-valid or cifar100 or ImageNet16-120
 
-    if hp == '12':
-        seed_list = [111, 777]
-    elif hp == '200':
-        seed_list = [777, 888, False] # 999
+    for dataset in datasets:
+        if hp == '12':
+            seed_list = [111, 777]
+        elif hp == '200':
+            #seed_list = [777, 888, False] # 999
+            seed_list = [False]
 
-    for seed in seed_list:
-        output_dir = '../nb201_query_data'
-        filename = f'hp{hp}_seed{seed}.pkl'
-        with open(os.path.join(output_dir, filename), 'rb') as f:
-            records = pickle.load(f)
+        for seed in seed_list:
+            output_dir = os.path.join('../nb201_query_data', dataset)
+            filename = f'hp{hp}_seed{seed}.pkl'
+            with open(os.path.join(output_dir, filename), 'rb') as f:
+                records = pickle.load(f)
 
-        print(len(records))  # 15625
-        transform_nb201_to_graph(records, hp=hp, seed=seed)
-        datasets = NasBench201Dataset(0, 15624, hp=hp, seed=seed, root='../')
-        print(datasets)
+            print(len(records))  # 15625
+            transform_nb201_to_graph(records, hp=hp, seed=seed, dataset=dataset)
+            datasets = NasBench201Dataset(0, 15624, dataset=dataset, hp=hp, seed=seed, root='../')
+            print(datasets)
