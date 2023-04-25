@@ -187,6 +187,7 @@ class Trainer2(tf.keras.Model):
                 forward_loss += rec_loss
 
         grads = tape.gradient(forward_loss, self.model.trainable_weights)
+        #grads = [tf.clip_by_norm(g, 1.) for g in grads]
         self.optimizer.apply_gradients(zip(grads, self.model.trainable_weights))
 
         # Backward loss
@@ -200,6 +201,7 @@ class Trainer2(tf.keras.Model):
             backward_loss = self.w3 * rev_loss
 
         grads = tape.gradient(backward_loss, self.model.trainable_weights)
+        #grads = [tf.clip_by_norm(g, 1.) for g in grads]
         self.optimizer.apply_gradients(zip(grads, self.model.trainable_weights))
         self.model.encoder.trainable = True
         self.model.decoder.trainable = True
@@ -293,10 +295,9 @@ def to_loader(datasets, batch_size: int, epochs: int):
 
 def retrain(trainer, datasets, batch_size, train_epochs, logdir, top_list, logger, repeat):
     # Generate total 200 architectures
-    _, _, _, found_arch_list = eval_query_best(trainer.model, trainer.x_dim,
-                                                                  trainer.z_dim, query_amount=100)
+    _, _, _, found_arch_list = eval_query_best(trainer.model, trainer.x_dim, trainer.z_dim, query_amount=100)
     _, _, _, found_arch_list2 = eval_query_best(trainer.model, trainer.x_dim,
-                                                                  trainer.z_dim, query_amount=100, noise_scale=0.05)
+                                                trainer.z_dim, query_amount=100, noise_scale=0.05)
     num_new_found = 0
     found_arch_list_set = []
     visited = []
@@ -501,7 +502,11 @@ def main(seed, train_sample_amount, valid_sample_amount, query_budget=100):
         retrain_model.set_weights(model.get_weights())
         trainer = Trainer2(retrain_model, x_dim, y_dim, z_dim, finetune=retrain_finetune)
         trainer.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3), run_eagerly=False)
-
+        '''
+        if not retrain_finetune:
+            datasets['train'].filter(lambda g: not np.isnan(g.y))
+            datasets['valid'].filter(lambda g: not np.isnan(g.y))
+        '''
         # Reset the lr for retrain
         top_list = []
         run = 0

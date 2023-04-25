@@ -5,7 +5,7 @@ from tensorflow.python.keras.callbacks import CSVLogger, EarlyStopping
 from datasets.transformation import ReshapeYTransform, OnlyValidAccTransform, OnlyFinalAcc, LabelScale
 from invertible_neural_networks.flow import MSE, MMD_multiscale
 from models.GNN_small import GraphAutoencoderNVPSmall, GraphAutoEncoderSmall
-from models.GNN import GraphAutoencoder
+from models.GNN import GraphAutoencoder, get_rank_weight
 import tensorflow as tf
 import os
 from datasets.nb201_dataset import NasBench201Dataset
@@ -99,13 +99,14 @@ class Trainer1(tf.keras.Model):
 
 
 class Trainer2(tf.keras.Model):
-    def __init__(self, model: GraphAutoencoderNVPSmall, x_dim, y_dim, z_dim, finetune=False):
+    def __init__(self, model: GraphAutoencoderNVPSmall, x_dim, y_dim, z_dim, finetune=False, is_rank_weight=False):
         super(Trainer2, self).__init__()
         self.model = model
         self.x_dim = x_dim
         self.y_dim = y_dim
         self.z_dim = z_dim
         self.finetune = finetune
+        self.is_rank_weight = is_rank_weight
 
         # For reg loss weight
         self.w1 = 5.
@@ -114,10 +115,15 @@ class Trainer2(tf.keras.Model):
         # For rev loss weight
         self.w3 = 10.
 
-        self.reg_loss_fn = tf.keras.losses.MeanSquaredError()
-        #self.reg_loss_fn = weighted_mse
+        if self.is_rank_weight:
+            reduction = 'none'
+        else:
+            reduction = 'auto'
+
+        self.reg_loss_fn = tf.keras.losses.MeanSquaredError(reduction=reduction)
         self.loss_latent = MMD_multiscale
-        self.loss_backward = MSE
+        #self.loss_backward = MSE
+        self.loss_backward = tf.keras.losses.MeanSquaredError(reduction=reduction)
         self.loss_tracker = {
             'total_loss': tf.keras.metrics.Mean(name="total_loss"),
             'reg_loss': tf.keras.metrics.Mean(name="reg_loss"),
@@ -136,21 +142,25 @@ class Trainer2(tf.keras.Model):
             self.kl_weight = 0.16
 
 
-    def cal_reg_and_latent_loss(self, y, z, y_out, nan_mask):
+    def cal_reg_and_latent_loss(self, y, z, y_out, nan_mask, rank_weight=None):
         reg_loss = self.reg_loss_fn(tf.dynamic_partition(y, nan_mask, 2)[0],
                                     tf.dynamic_partition(y_out[:, self.z_dim:], nan_mask, 2)[0])
         latent_loss = self.loss_latent(tf.dynamic_partition(tf.concat([z, y], axis=-1), nan_mask, 2)[0],
                                        tf.dynamic_partition(tf.concat([y_out[:, :self.z_dim], y_out[:, -self.y_dim:]], axis=-1),
                                                  nan_mask, 2)[0])  # * x_batch_train.shape[0]
+        if self.is_rank_weight:
+            reg_loss = tf.multiply(reg_loss, rank_weight)
         return reg_loss, latent_loss
 
-    def cal_rev_loss(self, undirected_x_batch_train, y, z, nan_mask, noise_scale):
+    def cal_rev_loss(self, undirected_x_batch_train, y, z, nan_mask, noise_scale, rank_weight=None):
         y = tf.dynamic_partition(y, nan_mask, 2)[0]
         z = tf.dynamic_partition(z, nan_mask, 2)[0]
         y = y + noise_scale * tf.random.normal(shape=tf.shape(y), dtype=tf.float32)
         _, _, _, _, x_encoding = self.model(undirected_x_batch_train, training=True)  # Logits for this minibatch
         x_rev = self.model.inverse(tf.concat([z, y], axis=-1))
         rev_loss = self.loss_backward(x_rev, tf.dynamic_partition(x_encoding, nan_mask, 2)[0])  # * x_batch_train.shape[0]
+        if self.is_rank_weight:
+            rev_loss = tf.multiply(rev_loss, rank_weight)
         return rev_loss
 
     def train_step(self, data):
@@ -163,6 +173,7 @@ class Trainer2(tf.keras.Model):
         y = y_batch_train[:, -self.y_dim:]
         z = tf.random.normal([tf.shape(y_batch_train)[0], self.z_dim])
         nan_mask = tf.squeeze(tf.where(~tf.math.is_nan(tf.reduce_sum(y_batch_train, axis=-1)), x=0, y=1))
+        rank_weight = get_rank_weight(tf.dynamic_partition(y, nan_mask, 2)[0]) if self.is_rank_weight else None
 
         # Open a GradientTape to record the operations run
         # during the forward pass, which enables auto-differentiation.
@@ -176,7 +187,7 @@ class Trainer2(tf.keras.Model):
 
             # To avoid nan loss when batch size is small
             reg_loss, latent_loss = tf.cond(tf.shape(nan_mask)[0] != 0,
-                                            lambda: self.cal_reg_and_latent_loss(y, z, y_out, nan_mask),
+                                            lambda: self.cal_reg_and_latent_loss(y, z, y_out, nan_mask, rank_weight),
                                             lambda: (0., 0.))
 
             forward_loss = self.w1 * reg_loss + self.w2 * latent_loss
@@ -195,7 +206,7 @@ class Trainer2(tf.keras.Model):
             self.model.decoder.trainable = False
             # To avoid nan loss when batch size is small
             rev_loss = tf.cond(tf.shape(nan_mask)[0] != 0,
-                               lambda: self.cal_rev_loss(undirected_x_batch_train, y, z, nan_mask, 0.0001),
+                               lambda: self.cal_rev_loss(undirected_x_batch_train, y, z, nan_mask, 0.0001, rank_weight),
                                lambda: 0.)
             backward_loss = self.w3 * rev_loss
 
@@ -222,14 +233,15 @@ class Trainer2(tf.keras.Model):
         y = y_batch_train[:, -self.y_dim:]
         z = tf.random.normal(shape=[tf.shape(y_batch_train)[0], self.z_dim])
         nan_mask = tf.squeeze(tf.where(~tf.math.is_nan(tf.reduce_sum(y_batch_train, axis=-1)), x=0, y=1))
+        rank_weight = get_rank_weight(tf.dynamic_partition(y, nan_mask, 2)[0]) if self.is_rank_weight else None
 
         ops_cls, adj_cls, kl_loss, y_out, x_encoding = self.model(undirected_x_batch_train, training=False)
         reg_loss, latent_loss = tf.cond(tf.shape(nan_mask)[0] != 0,
-                                        lambda: self.cal_reg_and_latent_loss(y, z, y_out, nan_mask),
+                                        lambda: self.cal_reg_and_latent_loss(y, z, y_out, nan_mask, rank_weight),
                                         lambda: (0., 0.))
         forward_loss = self.w1 * reg_loss + self.w2 * latent_loss
         rev_loss = tf.cond(tf.shape(nan_mask)[0] != 0,
-                           lambda: self.cal_rev_loss(undirected_x_batch_train, y, z, nan_mask, 0.),
+                           lambda: self.cal_rev_loss(undirected_x_batch_train, y, z, nan_mask, 0., rank_weight),
                            lambda: 0.)
         backward_loss = self.w3 * rev_loss
         if self.finetune:
@@ -294,9 +306,9 @@ def to_loader(datasets, batch_size: int, epochs: int):
 def retrain(trainer, datasets, batch_size, train_epochs, logdir, top_list, logger, repeat):
     # Generate total 200 architectures
     _, _, _, found_arch_list = eval_query_best(trainer.model, trainer.x_dim,
-                                                                  trainer.z_dim, query_amount=100)
-    _, _, _, found_arch_list2 = eval_query_best(trainer.model, trainer.x_dim,
-                                                                  trainer.z_dim, query_amount=100, noise_scale=0.05)
+                                               trainer.z_dim, query_amount=100, version=1)
+    _, _, _, found_arch_list2 = eval_query_best(trainer.model, trainer.x_dim, trainer.z_dim,
+                                                query_amount=100, noise_scale=0.05, version=1)
     num_new_found = 0
     found_arch_list_set = []
     visited = []

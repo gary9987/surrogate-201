@@ -21,7 +21,7 @@ tf.random.set_seed(random_seed)
 nb201api = create(None, 'tss', fast_mode=True, verbose=False)
 
 
-def inverse_from_acc(model: tf.keras.Model, num_sample_z: int, x_dim: int, z_dim: int, to_inv_acc):
+def inverse_from_acc(model: tf.keras.Model, num_sample_z: int, x_dim: int, z_dim: int, to_inv_acc, version=2):
     batch_size = int(tf.shape(to_inv_acc)[0])
     y = tf.repeat(to_inv_acc, num_sample_z, axis=0)  # (batch_size * num_sample_z, 1)
     z = np.random.multivariate_normal([0.] * z_dim, np.eye(z_dim),
@@ -29,9 +29,13 @@ def inverse_from_acc(model: tf.keras.Model, num_sample_z: int, x_dim: int, z_dim
     y = np.concatenate([z, y], axis=-1).astype(np.float32)  # (num_sample_z, z_dim + 1)
 
     rev_latent = model.inverse(y)  # (num_sample_z, latent_dim)
-    #rev_latent += 0.05 * tf.random.normal(tf.shape(rev_latent))
-    #rev_latent = rev_latent[:, :x_dim]
-    rev_latent = tf.reshape(rev_latent, (batch_size, 8, -1))  # (batch_size, num_sample_z, latent_dim)
+    if version == 1:
+        rev_latent = rev_latent[:, :x_dim]
+    elif version == 2:
+        rev_latent = tf.reshape(rev_latent, (batch_size, 8, -1))  # (batch_size, num_sample_z, latent_dim)
+    else:
+        raise ValueError('version')
+
     _, adj, ops_cls, adj_cls = model.decode(rev_latent)
     ops_cls = tf.reshape(ops_cls, (batch_size, num_sample_z, -1, model.num_ops))  # (batch_size, num_sample_z, 8, 7)
     ops_vote = tf.reduce_sum(ops_cls, axis=1).numpy()  # (batch_size, 1, 8 * 7)
@@ -75,7 +79,7 @@ def query_acc_by_ops(ops: Union[list, np.ndarray], is_random=False, on='valid-ac
     return acc
 
 
-def eval_query_best(model: tf.keras.Model, x_dim: int, z_dim: int, query_amount=10, noise_scale=0.0):
+def eval_query_best(model: tf.keras.Model, x_dim: int, z_dim: int, query_amount=10, noise_scale=0.0, version=2):
     # Eval query 1.0
     x = []
     y = []
@@ -84,7 +88,7 @@ def eval_query_best(model: tf.keras.Model, x_dim: int, z_dim: int, query_amount=
     to_inv_acc = 1.0
     to_inv = tf.repeat(tf.reshape(tf.constant(to_inv_acc), [-1, 1]), query_amount, axis=0)
     to_inv += noise_scale * tf.random.normal(tf.shape(to_inv))
-    ops_idx_lis, adj_list = inverse_from_acc(model, num_sample_z=1, x_dim=x_dim, z_dim=z_dim, to_inv_acc=to_inv)
+    ops_idx_lis, adj_list = inverse_from_acc(model, num_sample_z=1, x_dim=x_dim, z_dim=z_dim, to_inv_acc=to_inv, version=version)
     for ops_idx, adj, query_acc in zip(ops_idx_lis, adj_list, to_inv[:, -1]):
         try:
             acc = query_acc_by_ops(ops_idx, is_random=False)

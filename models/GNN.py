@@ -175,15 +175,18 @@ def bpr_loss(y_true, y_pred):
     return total_loss / tf.cast(N, tf.float32) ** 2
 
 
-def weighted_mse(y_true, y_pred):
-
+def get_rank_weight(y_true):
     N = tf.shape(y_true)[0]  # y_true.shape[0] = batch size
-
-    mse = tf.keras.losses.mse(y_true, y_pred)
     rank = tf.subtract(y_true, tf.transpose(y_true))
     rank = tf.where(rank < 0, 1., 0.)
     rank = tf.reduce_sum(rank, axis=1)
     weight = tf.math.reciprocal(rank + tf.cast(N, tf.float32) * 1e-3)
+    return weight
+
+
+def weighted_mse(y_true, y_pred):
+    mse = tf.keras.losses.mse(y_true, y_pred)
+    weight = get_rank_weight(y_true)
     '''
     mse = tf.keras.losses.mse(y_true, y_pred)
     weight = []
