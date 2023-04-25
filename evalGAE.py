@@ -53,7 +53,7 @@ def inverse_from_acc(model: tf.keras.Model, num_sample_z: int, x_dim: int, z_dim
     return ops_idx_list, adj_list
 
 
-def query_acc_by_ops(ops: Union[list, np.ndarray], is_random=False, on='valid-accuracy') -> float:
+def query_acc_by_ops(ops: Union[list, np.ndarray], dataset_name, is_random=False, on='valid-accuracy') -> float:
     """
     :param ops: ops_idx or ops_cls
     :param is_random: False will return the avg. of result
@@ -64,22 +64,27 @@ def query_acc_by_ops(ops: Union[list, np.ndarray], is_random=False, on='valid-ac
         ops_idx = np.argmax(ops, axis=-1)
     else:
         ops_idx = ops
+
     ops = [OPS_by_IDX_201[i] for i in ops_idx]
     arch_str = ops_list_to_nb201_arch_str(ops)
     idx = nb201api.query_index_by_arch(arch_str)
+    meta_info = nb201api.query_meta_info_by_index(idx)
 
     if on == 'valid-accuracy':
-        data = nb201api.get_more_info(idx, 'cifar10-valid', iepoch=199, hp='200', is_random=is_random)
-        acc = data['valid-accuracy'] / 100
+        data = meta_info.get_metrics(dataset_name, 'x-valid', iepoch=None, is_random=is_random)
+        acc = data['accuracy'] / 100
     elif on == 'test-accuracy':
-        data = nb201api.get_more_info(idx, 'cifar10', iepoch=199, hp='200', is_random=is_random)
-        acc = data['test-accuracy'] / 100
+        if dataset_name == 'cifar10-valid':
+            data = meta_info.get_metrics(dataset_name, 'ori-test', iepoch=None, is_random=is_random)
+        else:
+            data = meta_info.get_metrics(dataset_name, 'x-test', iepoch=None, is_random=is_random)
+        acc = data['accuracy'] / 100
     else:
         raise ValueError('on should be valid-accuracy or test-accuracy')
     return acc
 
 
-def eval_query_best(model: tf.keras.Model, x_dim: int, z_dim: int, query_amount=10, noise_scale=0.0, version=2):
+def eval_query_best(model: tf.keras.Model, dataset_name, x_dim: int, z_dim: int, query_amount=10, noise_scale=0.0, version=2):
     # Eval query 1.0
     x = []
     y = []
@@ -91,7 +96,7 @@ def eval_query_best(model: tf.keras.Model, x_dim: int, z_dim: int, query_amount=
     ops_idx_lis, adj_list = inverse_from_acc(model, num_sample_z=1, x_dim=x_dim, z_dim=z_dim, to_inv_acc=to_inv, version=version)
     for ops_idx, adj, query_acc in zip(ops_idx_lis, adj_list, to_inv[:, -1]):
         try:
-            acc = query_acc_by_ops(ops_idx, is_random=False)
+            acc = query_acc_by_ops(ops_idx, dataset_name, is_random=False)
             x.append(query_acc)
             y.append(acc)
             found_arch_list.append({'x': np.eye(len(OPS_by_IDX_201))[ops_idx], 'a': adj, 'y': np.array([acc])})
@@ -109,6 +114,7 @@ def eval_query_best(model: tf.keras.Model, x_dim: int, z_dim: int, query_amount=
 
 
 if __name__ == '__main__':
+    dataset = 'cifar10-valid'
     num_ops = 7
     num_nodes = 8
     num_adjs = 64
@@ -252,7 +258,7 @@ if __name__ == '__main__':
     plt.savefig('decending.png')
     plt.cla()
 
-    invalid, avg_acc, best_acc, _ = eval_query_best(model, x_dim, z_dim)
+    invalid, avg_acc, best_acc, _ = eval_query_best(model, dataset, x_dim, z_dim)
     print('Number of invalid decode', invalid)
     print('Avg found acc', avg_acc)
     print('Best found acc', best_acc)

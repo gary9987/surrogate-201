@@ -294,10 +294,10 @@ def to_loader(datasets, batch_size: int, epochs: int):
     return loader
 
 
-def retrain(trainer, datasets, batch_size, train_epochs, logdir, top_list, logger, repeat):
+def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, top_list, logger, repeat):
     # Generate total 200 architectures
-    _, _, _, found_arch_list = eval_query_best(trainer.model, trainer.x_dim, trainer.z_dim, query_amount=100)
-    _, _, _, found_arch_list2 = eval_query_best(trainer.model, trainer.x_dim,
+    _, _, _, found_arch_list = eval_query_best(trainer.model, dataset_name, trainer.x_dim, trainer.z_dim, query_amount=100)
+    _, _, _, found_arch_list2 = eval_query_best(trainer.model, dataset_name, trainer.x_dim,
                                                 trainer.z_dim, query_amount=100, noise_scale=0.05)
     num_new_found = 0
     found_arch_list_set = []
@@ -317,7 +317,7 @@ def retrain(trainer, datasets, batch_size, train_epochs, logdir, top_list, logge
     top_acc_list = []
     found_arch_list_set = sorted(found_arch_list_set, key=lambda x: x['y'], reverse=True)[:5]
     for idx, i in enumerate(found_arch_list_set):
-        acc = query_acc_by_ops(i['x'])
+        acc = query_acc_by_ops(i['x'], dataset_name)
         top_acc_list.append(acc)
         found_arch_list_set[idx]['y'] = np.array([acc])
 
@@ -393,7 +393,7 @@ def prepare_model(nvp_config, latent_dim, num_layers, d_model, num_heads, dff, n
     return pretrained_model, model, retrain_model
 
 
-def main(seed, dataset, train_sample_amount, valid_sample_amount, query_budget):
+def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_budget):
     logdir, logger = get_logdir_and_logger(f'trainGAE_two_phase_{seed}.log')
     random_seed = seed
     tf.random.set_seed(random_seed)
@@ -424,7 +424,7 @@ def main(seed, dataset, train_sample_amount, valid_sample_amount, query_budget):
     patience = 100
 
     # 15624
-    datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, dataset=dataset,
+    datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, dataset=dataset_name,
                                                                  hp=str(label_epochs), seed=False),
                                               ratio=[0.8, 0.1, 0.1],
                                               shuffle=True,
@@ -515,7 +515,7 @@ def main(seed, dataset, train_sample_amount, valid_sample_amount, query_budget):
         while now_queried < query_budget:
             logger.info('')
             logger.info(f'Retrain run {run}')
-            top_acc_list, top_arch_list, num_new_found = retrain(trainer, datasets, batch_size, retrain_epochs, logdir, top_list, logger, repeat_label)
+            top_acc_list, top_arch_list, num_new_found = retrain(trainer, datasets, dataset_name, batch_size, retrain_epochs, logdir, top_list, logger, repeat_label)
             now_queried += num_new_found
             if now_queried > query_budget:
                 break
@@ -531,7 +531,7 @@ def main(seed, dataset, train_sample_amount, valid_sample_amount, query_budget):
     logger.info(f'Best found acc {max(global_top_acc_list)}')
     top_test_acc_list = []
     for i in global_top_arch_list:
-        acc = query_acc_by_ops(i['x'], is_random=False, on='test-accuracy')
+        acc = query_acc_by_ops(i['x'], dataset_name, is_random=False, on='test-accuracy')
         top_test_acc_list.append(acc)
     logger.info(f'Avg test acc {sum(top_test_acc_list) / len(top_test_acc_list)}')
     logger.info(f'Best test acc {max(top_test_acc_list)}')
