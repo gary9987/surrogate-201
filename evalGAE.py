@@ -68,7 +68,7 @@ def query_acc_by_ops(ops: Union[list, np.ndarray], dataset_name, is_random=False
     ops = [OPS_by_IDX_201[i] for i in ops_idx]
     arch_str = ops_list_to_nb201_arch_str(ops)
     idx = nb201api.query_index_by_arch(arch_str)
-    meta_info = nb201api.query_meta_info_by_index(idx)
+    meta_info = nb201api.query_meta_info_by_index(idx, hp='200')
 
     if on == 'valid-accuracy':
         data = meta_info.get_metrics(dataset_name, 'x-valid', iepoch=None, is_random=is_random)
