@@ -306,9 +306,10 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
     # Predict accuracy by INN (performance predictor)
     x = tf.stack([tf.constant(i['x']) for i in found_arch_list_set])
     a = tf.stack([tf.constant(i['a']) for i in found_arch_list_set])
-    _, _, _, reg, _ = trainer.model((x, a), training=False)
-    for i in range(len(found_arch_list_set)):
-        found_arch_list_set[i]['y'] = reg[i][-1].numpy()
+    if tf.shape(x)[0] != 0:
+        _, _, _, reg, _ = trainer.model((x, a), training=False)
+        for i in range(len(found_arch_list_set)):
+            found_arch_list_set[i]['y'] = reg[i][-1].numpy()
 
     # Select top-k to evaluate true label and add to training dataset
     top_acc_list = []
