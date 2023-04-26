@@ -445,7 +445,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     logger.info(f'Best found acc {max(global_top_acc_list)}')
     top_test_acc_list = []
     for i in global_top_arch_list:
-        acc = query_acc_by_ops(i['x'], is_random=False, on='test-accuracy')
+        acc = query_acc_by_ops(i['x'], dataset_name=dataset_name, is_random=False, on='test-accuracy')
         top_test_acc_list.append(acc)
     logger.info(f'Avg test acc {sum(top_test_acc_list) / len(top_test_acc_list)}')
     logger.info(f'Best test acc {max(top_test_acc_list)}')
