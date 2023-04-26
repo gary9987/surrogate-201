@@ -75,7 +75,7 @@ def query_acc_by_ops(ops: Union[list, np.ndarray], dataset_name, is_random=False
         acc = data['accuracy'] / 100
     elif on == 'test-accuracy':
         if dataset_name == 'cifar10-valid':
-            data = meta_info.get_metrics(dataset_name, 'ori-test', iepoch=None, is_random=is_random)
+            data = meta_info.get_metrics('cifar10', 'ori-test', iepoch=None, is_random=is_random)
         else:
             data = meta_info.get_metrics(dataset_name, 'x-test', iepoch=None, is_random=is_random)
         acc = data['accuracy'] / 100
