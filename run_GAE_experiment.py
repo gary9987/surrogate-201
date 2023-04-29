@@ -9,7 +9,7 @@ if __name__ == '__main__':
     avg_test_acc_list = []
     best_test_acc_list = []
     for i in range(10):
-        avg_acc, best_acc, avg_test_acc, best_test_acc = main(seed=i, train_sample_amount=50, valid_sample_amount=50, query_budget=192)
+        avg_acc, best_acc, avg_test_acc, best_test_acc = main(seed=i, dataset_name='cifar10-valid', train_sample_amount=250, valid_sample_amount=50, query_budget=400)
         avg_acc_list.append(avg_acc)
         best_acc_list.append(best_acc)
         avg_test_acc_list.append(avg_test_acc)
