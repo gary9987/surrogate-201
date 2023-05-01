@@ -162,8 +162,9 @@ class GraphAutoencoderEnsembleNVP(GraphAutoencoder):
         if nvp_config['inp_dim'] is None:
             nvp_config['inp_dim'] = latent_dim
 
+        self.num_nvp = num_nvp
         self.pad_dim = nvp_config['inp_dim'] - latent_dim * num_nodes
-        self.nvp_list = [NVP(**nvp_config)] * num_nvp
+        self.nvp_list = [NVP(**nvp_config) for _ in range(num_nvp)]
 
     def call(self, inputs):
         ops_cls, adj_cls, kl_loss, latent_mean = super().call(inputs)

@@ -10,7 +10,7 @@ import tensorflow as tf
 import os
 from datasets.nb201_dataset import NasBench201Dataset
 from datasets.utils import train_valid_test_split_dataset, mask_graph_dataset, arch_list_to_set
-from evalGAE import eval_query_best, query_acc_by_ops
+from evalGAE import query_acc_by_ops, ensemble_eval_query_best
 from trainGAE_two_phase import to_loader
 from utils.py_utils import get_logdir_and_logger
 from spektral.data import Graph
@@ -140,7 +140,6 @@ class Trainer2(tf.keras.Model):
             self.ops_weight = 1
             self.adj_weight = 1
             self.kl_weight = 0.16
-
 
     def cal_reg_and_latent_loss(self, y, z, y_out, nan_mask, rank_weight=None):
         # y: (batch_size, y_dim)
@@ -311,24 +310,14 @@ def train(phase: int, model, loader, train_epochs, logdir, callbacks=None, x_dim
 
 def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, top_list, logger, repeat, top_k=5):
     # Generate total 200 architectures
-    _, _, _, found_arch_list = eval_query_best(trainer.model, dataset_name, trainer.x_dim, trainer.z_dim, query_amount=100)
-    _, _, _, found_arch_list2 = eval_query_best(trainer.model, dataset_name, trainer.x_dim,
-                                                trainer.z_dim, query_amount=100, noise_scale=0.05)
-    num_new_found = 0
-    found_arch_list.extend(found_arch_list2)
-    found_arch_list_set = arch_list_to_set(found_arch_list)
+    _, _, _, found_arch_list = ensemble_eval_query_best(trainer.model, dataset_name, trainer.x_dim, trainer.z_dim, query_amount=1)
 
-    # Predict accuracy by INN (performance predictor)
-    x = tf.stack([tf.constant(i['x']) for i in found_arch_list_set])
-    a = tf.stack([tf.constant(i['a']) for i in found_arch_list_set])
-    if tf.shape(x)[0] != 0:
-        _, _, _, reg, _ = trainer.model((x, a), training=False)
-        for i in range(len(found_arch_list_set)):
-            found_arch_list_set[i]['y'] = reg[i][-1].numpy()
+    num_new_found = 0
+    found_arch_list_set = arch_list_to_set(found_arch_list)
 
     # Select top-k to evaluate true label and add to training dataset
     top_acc_list = []
-    found_arch_list_set = sorted(found_arch_list_set, key=lambda g: g['y'], reverse=True)[:top_k]
+
     for idx, i in enumerate(found_arch_list_set):
         acc = query_acc_by_ops(i['x'], dataset_name)
         top_acc_list.append(acc)
@@ -348,6 +337,7 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
         if str(i['x'].tolist()) in train_dict:
             if i['x'].tolist() not in top_list and np.isnan(train_dict[str(i['x'].tolist())]):
                 datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * repeat)
+                datasets['train_1'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])])
                 top_list.append(i['x'].tolist())
                 logger.info(f'Data not in train and not in top_list {i["y"].tolist()}')
                 num_new_found += 1
@@ -361,10 +351,12 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
             if i['x'].tolist() not in top_list:
                 logger.info(f'Data not in train and not in top_list {i["y"].tolist()}')
                 datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * repeat)
+                datasets['train_1'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])])
                 top_list.append(i['x'].tolist())
                 num_new_found += 1
 
     logger.info(f'{datasets["train"]}')
+    logger.info(f'{datasets["train_1"]}')
     logger.info(f'Length of top_list {len(top_list)}')
 
     loader = to_loader(datasets, batch_size, train_epochs)
@@ -385,6 +377,44 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
     logger.info(str(dict(zip(trainer.metrics_names, results))))
 
     return top_acc_list, found_arch_list_set, num_new_found
+
+
+def get_theta(model, datasets, num_nvp, beta=1. ):
+    n = len(datasets)
+    theta = 0
+
+    regs = []
+    for m in range(n):
+        data = datasets[m]
+        x, a, y = data.x, data.a, data.y
+        _, _, _, reg, _ = model((tf.constant([x]), tf.constant([a])), training=False)
+        # reg: (1, num_nvp, z_dim+y_dim)
+        regs.append(reg)
+
+    for i in range(n):
+        under_q = 0
+        for k in range(num_nvp):
+            loss = 0
+            for m in range(i+1):
+                data = datasets[m]
+                x, a, y = data.x, data.a, data.y
+                loss += tf.keras.losses.mean_squared_error(y, regs[m][0][k][-1])
+
+            under_q += tf.exp(-(beta**-1) * loss)
+
+        upper_q = 0
+        for m in range(i+1):
+            data = datasets[m]
+            x, a, y = data.x, data.a, data.y
+            y = tf.expand_dims(y, axis=0)
+            y = tf.expand_dims(y, axis=0)
+            y = tf.repeat(y, num_nvp, axis=1)
+            upper_q += tf.keras.losses.mean_squared_error(y, regs[m][:, :, -1:])
+
+        upper_q = tf.exp(-(beta**-1) * upper_q)
+        theta += (upper_q / under_q) / n
+
+    return tf.squeeze(theta)
 
 
 def prepare_model(num_nvp, nvp_config, latent_dim, num_layers, d_model, num_heads, dff, num_ops, num_nodes, num_adjs, dropout_rate, eps_scale):
@@ -410,7 +440,7 @@ def prepare_model(num_nvp, nvp_config, latent_dim, num_layers, d_model, num_head
 
 
 def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_budget):
-    logdir, logger = get_logdir_and_logger(f'trainGAE_two_phase_{seed}.log')
+    logdir, logger = get_logdir_and_logger(f'trainGAE_ensemble_{seed}.log')
     random_seed = seed
     tf.random.set_seed(random_seed)
     random.seed(random_seed)
@@ -423,6 +453,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     label_epochs = 200
 
     train_phase = [0, 1]  # 0 not train, 1 train
+    #pretrained_weight = 'logs/cifar10_ensemble/modelGAE_weights_phase2'
     pretrained_weight = 'logs/phase1_model_cifar100/modelGAE_weights_phase1'
 
     retrain_epochs = 20
@@ -433,15 +464,15 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     dff = 256
     num_layers = 3
     num_heads = 3
-    finetune = True
-    retrain_finetune = True
+    finetune = False
+    retrain_finetune = False
     latent_dim = 16
 
     train_epochs = 1000
     patience = 100
 
     # 15624
-    datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=1000, dataset=dataset_name,
+    datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, dataset=dataset_name,
                                                                  hp=str(label_epochs), seed=False),
                                               ratio=[0.8, 0.1, 0.1],
                                               shuffle=True,
@@ -464,9 +495,9 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
 
     num_nvp = 10
     nvp_config = {
-        'n_couple_layer': 1,
-        'n_hid_layer': 1,
-        'n_hid_dim': 256,
+        'n_couple_layer': 4,
+        'n_hid_layer': 4,
+        'n_hid_dim': 64,
         'name': 'NVP',
         'inp_dim': tot_dim
     }
@@ -498,7 +529,6 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     #model.nvp.set_weights(pretrained_model.nvp.get_weights())
     model.decoder.set_weights(pretrained_model.decoder.get_weights())
 
-
     global_top_acc_list = []
     global_top_arch_list = []
     if train_phase[1]:
@@ -506,8 +536,14 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         repeat_label = 20
         now_queried = train_sample_amount + valid_sample_amount
         logger.info('Train phase 2')
+        datasets['train_1'] = mask_graph_dataset(datasets['train'], train_sample_amount, 1, random_seed=random_seed)
+        datasets['valid_1'] = mask_graph_dataset(datasets['valid'], valid_sample_amount, 1, random_seed=random_seed)
+        datasets['train_1'].filter(lambda g: not np.isnan(g.y))
+        datasets['valid_1'].filter(lambda g: not np.isnan(g.y))
         datasets['train'] = mask_graph_dataset(datasets['train'], train_sample_amount, repeat_label, random_seed=random_seed)
         datasets['valid'] = mask_graph_dataset(datasets['valid'], valid_sample_amount, repeat_label, random_seed=random_seed)
+        datasets['train'].filter(lambda g: not np.isnan(g.y))
+        datasets['valid'].filter(lambda g: not np.isnan(g.y))
 
         loader = to_loader(datasets, batch_size, train_epochs)
         callbacks = [CSVLogger(os.path.join(logdir, f"learning_curve_phase2.csv")),
@@ -524,11 +560,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         retrain_model.set_weights(model.get_weights())
         trainer = Trainer2(retrain_model, x_dim, y_dim, z_dim, finetune=retrain_finetune, is_rank_weight=False)
         trainer.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3), run_eagerly=False)
-        '''
-        if not retrain_finetune:
-            datasets['train'].filter(lambda g: not np.isnan(g.y))
-            datasets['valid'].filter(lambda g: not np.isnan(g.y))
-        '''
+
         # Reset the lr for retrain
         top_list = []
         run = 0
@@ -544,6 +576,9 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
             global_top_acc_list += top_acc_list
             global_top_arch_list += top_arch_list
             run += 1
+
+        theta = get_theta(model, datasets['train_1'], num_nvp, beta=1.).numpy().tolist()
+        logger.info(f'Theta: {theta}')
     else:
         model.load_weights(pretrained_weight)
 
