@@ -567,7 +567,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         while now_queried < query_budget:
             logger.info('')
             logger.info(f'Retrain run {run}')
-            top_acc_list, top_arch_list, num_new_found = retrain(trainer, datasets, dataset_name, 64,
+            top_acc_list, top_arch_list, num_new_found = retrain(trainer, datasets, dataset_name, batch_size,
                                                                  retrain_epochs, logdir, top_list, logger,
                                                                  repeat_label, top_k)
             now_queried += num_new_found
