@@ -8,7 +8,8 @@ from models.GNN import GraphAutoencoder, GraphAutoencoderNVP, weighted_mse, get_
 from models.TransformerAE import TransformerAutoencoderNVP
 import tensorflow as tf
 import os
-from datasets.nb201_dataset import NasBench201Dataset
+from datasets.nb201_dataset import NasBench201Dataset, OP_PRIMITIVES_NB201
+from datasets.nb101_dataset import NasBench101Dataset, OP_PRIMITIVES_NB101
 from datasets.utils import train_valid_test_split_dataset, mask_graph_dataset, arch_list_to_set
 from spektral.data import BatchLoader
 from evalGAE import eval_query_best, query_acc_by_ops
@@ -406,23 +407,18 @@ def prepare_model(nvp_config, latent_dim, num_layers, d_model, num_heads, dff, n
 
 
 def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_budget):
-    logdir, logger = get_logdir_and_logger(f'trainGAE_two_phase_{seed}.log')
+    logdir, logger = get_logdir_and_logger(dataset_name, f'trainGAE_two_phase_{seed}.log')
     random_seed = seed
     tf.random.set_seed(random_seed)
     random.seed(random_seed)
 
     top_k = 5
-    num_ops = 7
-    num_nodes = 8
-    num_adjs = 64
-    is_only_validation_data = True
-    label_epochs = 200
 
-    train_phase = [0, 1]  # 0 not train, 1 train
+    is_only_validation_data = True
+    train_phase = [1, 0]  # 0 not train, 1 train
     pretrained_weight = 'logs/phase1_model_cifar100/modelGAE_weights_phase1'
 
     retrain_epochs = 20
-
     eps_scale = 0.05  # 0.1
     d_model = 32
     dropout_rate = 0.0
@@ -436,18 +432,32 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     train_epochs = 1000
     patience = 100
 
-    # 15624
-    datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, dataset=dataset_name,
-                                                                 hp=str(label_epochs), seed=False),
-                                              ratio=[0.8, 0.1, 0.1],
-                                              shuffle=True,
-                                              shuffle_seed=0)
+    if dataset_name == 'nb101':
+        num_ops = len(OP_PRIMITIVES_NB101)  # 5
+        num_nodes = 7
+        num_adjs = num_nodes ** 2
+        datasets = train_valid_test_split_dataset(NasBench101Dataset(start=0, end=423623),
+                                                  ratio=[0.8, 0.1, 0.1],
+                                                  shuffle=True,
+                                                  shuffle_seed=0)
+    else:
+        # 15624
+        num_ops = len(OP_PRIMITIVES_NB201)  # 7
+        num_nodes = 8
+        num_adjs = num_nodes ** 2
+        label_epochs = 200
+        datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, dataset=dataset_name,
+                                                                     hp=str(label_epochs), seed=False),
+                                                  ratio=[0.8, 0.1, 0.1],
+                                                  shuffle=True,
+                                                  shuffle_seed=0)
 
     for key in datasets:
         if is_only_validation_data:
             datasets[key].apply(OnlyValidAccTransform())
             datasets[key].apply(OnlyFinalAcc())
-            datasets[key].apply(LabelScale(scale=0.01))
+            if dataset_name != 'nb101':
+                datasets[key].apply(LabelScale(scale=0.01))
         else:
             datasets[key].apply(ReshapeYTransform())
 
