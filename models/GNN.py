@@ -67,7 +67,7 @@ class TransformerDecoder(Decoder):
         ]
 
         self.ops_cls = tf.keras.layers.Dense(num_ops, activation='softmax')
-        self.adj_weight = tf.keras.layers.Dense(8, activation='relu')
+        self.adj_weight = tf.keras.layers.Dense(num_nodes, activation='relu')
         self.adj_cls = tf.keras.layers.Dense(2, activation='softmax')
 
 
@@ -103,7 +103,7 @@ class GraphAutoencoder(tf.keras.Model):
         self.encoder = GINEncoder(self.latent_dim, [128, 128, 128, 128], 'relu', dropout_rate)
 
         self.decoder = TransformerDecoder(num_layers=num_layers, d_model=d_model, num_heads=num_heads,
-                               dff=dff, input_length=8, num_ops=num_ops, num_nodes=num_nodes, num_adjs=num_adjs,
+                               dff=dff, input_length=num_nodes, num_ops=num_ops, num_nodes=num_nodes, num_adjs=num_adjs,
                                dropout_rate=dropout_rate)
 
     def sample(self, mean, log_var, eps_scale=0.01):

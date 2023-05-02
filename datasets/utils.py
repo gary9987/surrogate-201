@@ -1,7 +1,7 @@
 import numpy as np
 
 from datasets.bananas_path_encoding_nb201 import Cell
-from datasets.query_nb201 import OPS_by_IDX_201
+from datasets.nb201_dataset import OPS_by_IDX_201
 
 
 def train_valid_test_split_dataset(data, ratio=[0.8, 0.1, 0.1], shuffle=False, shuffle_seed=0):

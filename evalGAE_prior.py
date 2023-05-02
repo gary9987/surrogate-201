@@ -1,8 +1,7 @@
 import numpy as np
 import tensorflow as tf
 from tqdm import tqdm
-from datasets.nb201_dataset import NasBench201Dataset
-from datasets.query_nb201 import OPS_by_IDX_201
+from datasets.nb201_dataset import NasBench201Dataset, OPS_by_IDX_201
 from datasets.transformation import OnlyValidAccTransform, ReshapeYTransform, OnlyFinalAcc, LabelScale
 from datasets.utils import train_valid_test_split_dataset, ops_list_to_nb201_arch_str
 from models.GNN import GraphAutoencoderNVP

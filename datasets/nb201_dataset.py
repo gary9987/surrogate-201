@@ -1,4 +1,3 @@
-import logging
 from pathlib import Path
 from typing import Union
 import spektral.data
@@ -8,7 +7,29 @@ import pickle
 import numpy as np
 import os
 
-logger = logging.getLogger(__name__)
+
+# Useful constants
+OP_PRIMITIVES_NB201 = [
+    'output',
+    'input',
+    'nor_conv_1x1',
+    'nor_conv_3x3',
+    'avg_pool_3x3',
+    'skip_connect',
+    'none',
+]
+
+OPS_by_IDX_201 = {OP_PRIMITIVES_NB201.index(i):i for i in OP_PRIMITIVES_NB201}
+OPS_201 = {i:OP_PRIMITIVES_NB201.index(i) for i in OP_PRIMITIVES_NB201}
+
+ADJACENCY = np.array([[0, 1, 1, 0, 1, 0, 0, 0],
+                    [0, 0, 0, 1, 0, 1 ,0 ,0],
+                    [0, 0, 0, 0, 0, 0, 1, 0],
+                    [0, 0, 0, 0, 0, 0, 1, 0],
+                    [0, 0, 0, 0, 0, 0, 0, 1],
+                    [0, 0, 0, 0, 0, 0, 0, 1],
+                    [0, 0, 0, 0, 0, 0, 0, 1],
+                    [0, 0, 0, 0, 0, 0, 0, 0]])
 
 
 def convert_matrix_ops_to_graph(matrix, ops):
@@ -56,7 +77,6 @@ def transform_nb201_to_graph(records: dict, hp: str, seed: int, dataset: str):
 
         filename = os.path.join(file_path, f'graph_{no}.npz')
         np.savez(filename, a=graph.a, x=graph.x, y=y)
-        logger.info(f'graph_{no}.npz is saved.')
         print(f'graph_{no}.npz is saved.')
         
 

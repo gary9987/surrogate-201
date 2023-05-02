@@ -4,29 +4,8 @@ from typing import List, Tuple
 from nats_bench import create
 import numpy as np
 from pathlib import Path
+from datasets.nb201_dataset import ADJACENCY
 
-# Useful constants
-OP_PRIMITIVES_201 = [
-    'output',
-    'input',
-    'nor_conv_1x1',
-    'nor_conv_3x3',
-    'avg_pool_3x3',
-    'skip_connect',
-    'none',
-]
-
-OPS_by_IDX_201 = {OP_PRIMITIVES_201.index(i):i for i in OP_PRIMITIVES_201}
-OPS_201 = {i:OP_PRIMITIVES_201.index(i) for i in OP_PRIMITIVES_201}
-
-ADJACENCY = np.array([[0, 1, 1, 0, 1, 0, 0, 0],
-                    [0, 0, 0, 1, 0, 1 ,0 ,0],
-                    [0, 0, 0, 0, 0, 0, 1, 0],
-                    [0, 0, 0, 0, 0, 0, 1, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 1],
-                    [0, 0, 0, 0, 0, 0, 0, 1],
-                    [0, 0, 0, 0, 0, 0, 0, 1],
-                    [0, 0, 0, 0, 0, 0, 0, 0]])
 
 # Partial reference from https://github.com/automl/SVGe/blob/main/datasets/NASBench201.py
 def convert_arch_str_to_martrix_ops(arch_str: str) -> Tuple[np.ndarray, List[str]]:

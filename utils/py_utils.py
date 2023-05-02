@@ -4,9 +4,9 @@ import sys
 from datetime import datetime
 
 
-def get_logdir_and_logger(filename='train.log'):
+def get_logdir_and_logger(dataset_name: str, filename='train.log'):
     now_time = datetime.now().strftime("%Y%m%d-%H%M%S")
-    logdir = os.path.join("logs", now_time)
+    logdir = os.path.join("logs", dataset_name, now_time)
     os.makedirs(logdir, exist_ok=True)
     logging.basicConfig(filename=os.path.join(logdir, filename),
                         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
