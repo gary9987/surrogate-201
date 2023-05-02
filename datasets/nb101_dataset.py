@@ -1,16 +1,17 @@
 # Partial code from: https://github.com/jovitalukasik/SVGe/blob/main/datasets/NASBench101.py
 import logging
 from pathlib import Path
-from typing import Union
 import spektral.data
 import wget
 from spektral.data import Dataset, Graph
 import pickle
 import numpy as np
 import os
+from datasets.nasbench_lib.model_spec import ModelSpec
 
 logger = logging.getLogger(__name__)
 
+NB101_CANONICAL_OPS = ['conv3x3-bn-relu', 'conv1x1-bn-relu', 'maxpool3x3']
 OP_PRIMITIVES_NB101 = [
     'output',
     'input',
@@ -42,9 +43,13 @@ def transform_nb101_data_list_to_graph(records: dict):
     file_path = f'../NasBench101Dataset'
     Path(file_path).mkdir(exist_ok=True)
     epoch = 108
+    map_hash_to_metrics = {}
     for record, no in zip(records, range(len(records))):
 
         matrix, ops, metrics = np.array(record[0]), record[1], record[2]
+
+        spec_hash = ModelSpec(matrix=matrix, ops=[i for i in ops]).hash_spec(NB101_CANONICAL_OPS)
+
         train_acc = 0.
         val_acc = 0.
         test_acc = 0.
@@ -60,13 +65,19 @@ def transform_nb101_data_list_to_graph(records: dict):
         test_acc = test_acc / 3.0
 
         y = np.array([[train_acc], [val_acc], [test_acc]], dtype=np.float32)
+        map_hash_to_metrics[spec_hash] = y
 
         graph = convert_matrix_ops_to_graph(matrix, ops)
 
         filename = os.path.join(file_path, f'graph_{no}.npz')
         np.savez(filename, a=graph.a, x=graph.x, y=y)
         logger.info(f'graph_{no}.npz is saved.')
+
+
         print(f'graph_{no}.npz is saved.')
+
+    with open(os.path.join(file_path, 'nb101_hash_to_metrics.pkl'), 'wb') as f:
+        pickle.dump(map_hash_to_metrics, f)
         
 
 class NasBench101Dataset(Dataset):
@@ -80,6 +91,7 @@ class NasBench101Dataset(Dataset):
         self.file_path = os.path.join(root, 'NasBench101Dataset')
         self.start = start
         self.end = end
+        self.hash_to_metrics = None
         super().__init__(**kwargs)
 
     def download(self):
@@ -91,12 +103,13 @@ class NasBench101Dataset(Dataset):
             print(f'Unzip dataset finish.')
 
     def read(self):
+        with open(os.path.join(self.file_path, 'nb101_hash_to_metrics.pkl'), 'rb') as f:
+            self.hash_to_metrics = pickle.load(f)
+
         output = []
         filename_list = []
 
-        for i in range(len(os.listdir(self.file_path))):
-            #with np.load(os.path.join(path, f'graph_{i}.npz')) as npz:
-            #    data = {'x': npz['x'], 'e': npz['e'], 'a': npz['a'], 'y': npz['y']}
+        for i in range(len(os.listdir(self.file_path)) - 1):  # include hash_to_metrics.pkl
             filename_list.append(os.path.join(self.file_path, f'graph_{i}.npz'))
 
         assert len(filename_list) > self.end
@@ -108,6 +121,12 @@ class NasBench101Dataset(Dataset):
 
         return output
 
+    def get_metrics(self, matrix, ops):
+        if isinstance(ops[0], int):
+            ops = [OPS_by_IDX_NB101[i] for i in ops]
+        spec_hash = ModelSpec(matrix=matrix, ops=[i for i in ops]).hash_spec(NB101_CANONICAL_OPS)
+        return self.hash_to_metrics[spec_hash]
+
 
 if __name__ == '__main__':
     output_dir = os.path.join('../nb101_query_data')
@@ -118,5 +137,29 @@ if __name__ == '__main__':
 
     print(len(records))  # 423624
     #transform_nb101_data_list_to_graph(records)
-    datasets = NasBench101Dataset(root='../')
+    datasets = NasBench101Dataset(end=1000, root='../')
+    # The following are identical
+    matrix = np.array([[0, 1, 0],
+                       [0, 0, 1],
+                       [0, 0, 0]])
+    ops = ['input', 'conv3x3-bn-relu', 'output']
+    metrics = datasets.get_metrics(matrix, ops)
+    print(metrics)
+    ops = [1, 3, 0]
+    metrics = datasets.get_metrics(matrix, ops)
+    print(metrics)
+    matrix = np.array([[0, 1, 0, 0],
+                       [0, 0, 0, 1],
+                       [0, 0, 0, 1],
+                       [0, 0, 0, 0]])
+    ops = ['input', 'conv3x3-bn-relu', 'conv1x1-bn-relu', 'output']
+    metrics = datasets.get_metrics(matrix, ops)
+    print(metrics)
+    matrix = np.array([[0, 0, 1, 0],
+                       [0, 0, 1, 0],
+                       [0, 0, 0, 1],
+                       [0, 0, 0, 0]])
+    ops = ['input', 'conv1x1-bn-relu', 'conv3x3-bn-relu', 'output']
+    metrics = datasets.get_metrics(matrix, ops)
+    print(metrics)
     print(datasets)
