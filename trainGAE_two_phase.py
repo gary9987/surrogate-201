@@ -327,7 +327,10 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
     top_acc_list = []
     found_arch_list_set = sorted(found_arch_list_set, key=lambda g: g['y'], reverse=True)[:top_k]
     for idx, i in enumerate(found_arch_list_set):
-        acc = query_acc_by_ops(i['x'], dataset_name)
+        if dataset_name != 'nb101':
+            acc = query_acc_by_ops(i['x'], dataset_name)
+        else:
+            acc = float(datasets['train'].get_metrics(i['a'], np.argmax(i['x'], axis=-1))[1])
         top_acc_list.append(acc)
         found_arch_list_set[idx]['y'] = np.array([acc])
 
@@ -556,8 +559,12 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     logger.info(f'Best found acc {max(global_top_acc_list)}')
     top_test_acc_list = []
     for i in global_top_arch_list:
-        acc = query_acc_by_ops(i['x'], dataset_name, is_random=False, on='test-accuracy')
+        if dataset_name != 'nb101':
+            acc = query_acc_by_ops(i['x'], dataset_name, is_random=False, on='test-accuracy')
+        else:
+            acc = float(datasets['train'].get_metrics(i['a'], np.argmax(i['x'], axis=-1))[2])
         top_test_acc_list.append(acc)
+
     logger.info(f'Avg test acc {sum(top_test_acc_list) / len(top_test_acc_list)}')
     logger.info(f'Best test acc {max(top_test_acc_list)}')
 

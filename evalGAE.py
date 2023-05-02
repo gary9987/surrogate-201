@@ -1,6 +1,7 @@
 from typing import Union
 import numpy as np
 import tensorflow as tf
+from datasets.nb101_dataset import NasBench101Dataset
 from datasets.nb201_dataset import NasBench201Dataset, OPS_by_IDX_201
 from datasets.transformation import OnlyValidAccTransform, ReshapeYTransform, OnlyFinalAcc, LabelScale
 from datasets.utils import train_valid_test_split_dataset, ops_list_to_nb201_arch_str
@@ -18,6 +19,7 @@ np.random.seed(random_seed)
 tf.random.set_seed(random_seed)
 
 nb201api = create(None, 'tss', fast_mode=True, verbose=False)
+nb101_dataset = NasBench101Dataset(end=0)
 
 
 def inverse_from_acc(model: tf.keras.Model, num_sample_z: int, x_dim: int, z_dim: int, to_inv_acc, version=2):
@@ -31,7 +33,7 @@ def inverse_from_acc(model: tf.keras.Model, num_sample_z: int, x_dim: int, z_dim
     if version == 1:
         rev_latent = rev_latent[:, :x_dim]
     elif version == 2:
-        rev_latent = tf.reshape(rev_latent, (batch_size, 8, -1))  # (batch_size, num_sample_z, latent_dim)
+        rev_latent = tf.reshape(rev_latent, (batch_size, model.num_nodes, -1))  # (batch_size, num_sample_z, latent_dim)
     else:
         raise ValueError('version')
 
@@ -39,7 +41,7 @@ def inverse_from_acc(model: tf.keras.Model, num_sample_z: int, x_dim: int, z_dim
     ops_cls = tf.reshape(ops_cls, (batch_size, num_sample_z, -1, model.num_ops))  # (batch_size, num_sample_z, 8, 7)
     ops_vote = tf.reduce_sum(ops_cls, axis=1).numpy()  # (batch_size, 1, 8 * 7)
 
-    adj = tf.reshape(adj, (batch_size, num_sample_z, 8, 8))  # (batch_size, num_sample_z, 8 * 8)
+    adj = tf.reshape(adj, (batch_size, num_sample_z, model.num_nodes, model.num_nodes))  # (batch_size, num_sample_z, 8 * 8)
     adj = tf.where(tf.reduce_mean(adj, axis=1) >= 0.5, x=1., y=0.).numpy()  # (batch_size, 8 * 8)
     #adj = np.reshape(adj, (batch_size, int(adj.shape[-1] ** (1 / 2)), int(adj.shape[-1] ** (1 / 2))))
 
@@ -95,10 +97,14 @@ def eval_query_best(model: tf.keras.Model, dataset_name, x_dim: int, z_dim: int,
     ops_idx_lis, adj_list = inverse_from_acc(model, num_sample_z=1, x_dim=x_dim, z_dim=z_dim, to_inv_acc=to_inv, version=version)
     for ops_idx, adj, query_acc in zip(ops_idx_lis, adj_list, to_inv[:, -1]):
         try:
-            acc = query_acc_by_ops(ops_idx, dataset_name, is_random=False)
+            if dataset_name != 'nb101':
+                acc = query_acc_by_ops(ops_idx, dataset_name, is_random=False)
+            else:
+                acc = nb101_dataset.get_metrics(adj, ops_idx)[1]
+
             x.append(query_acc)
             y.append(acc)
-            found_arch_list.append({'x': np.eye(len(OPS_by_IDX_201))[ops_idx], 'a': adj, 'y': np.array([acc])})
+            found_arch_list.append({'x': np.eye(model.num_ops)[ops_idx], 'a': adj, 'y': np.array([acc])})
         except:
             print('invalid')
             invalid += 1

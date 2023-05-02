@@ -122,8 +122,9 @@ class NasBench101Dataset(Dataset):
         return output
 
     def get_metrics(self, matrix, ops):
-        if isinstance(ops[0], int):
+        if isinstance(ops[0], int) or isinstance(ops, np.ndarray):
             ops = [OPS_by_IDX_NB101[i] for i in ops]
+        matrix = np.array(matrix).astype(np.int8)
         spec_hash = ModelSpec(matrix=matrix, ops=[i for i in ops]).hash_spec(NB101_CANONICAL_OPS)
         return self.hash_to_metrics[spec_hash]
 
@@ -136,7 +137,7 @@ if __name__ == '__main__':
         records = pickle.load(f)
 
     print(len(records))  # 423624
-    #transform_nb101_data_list_to_graph(records)
+    transform_nb101_data_list_to_graph(records)
     datasets = NasBench101Dataset(end=1000, root='../')
     # The following are identical
     matrix = np.array([[0, 1, 0],
@@ -163,3 +164,4 @@ if __name__ == '__main__':
     metrics = datasets.get_metrics(matrix, ops)
     print(metrics)
     print(datasets)
+    ops = [1, 2, 2, 3, 3, 3, 0]
