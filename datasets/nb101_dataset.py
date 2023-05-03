@@ -87,11 +87,13 @@ def mask_padding_vertex_for_model(a, x):
     :param a: (nodes, nodes)
     :return: x: (nodes, num_ops), a: (nodes, nodes)
     """
-    ops = np.argmax(x, axis=-1).tolist()
-    output_idx = ops.index(0)
-    for i in range(output_idx+1, x.shape[0]):
-        x[i] = np.zeros(x.shape[1])
-
+    try:
+        ops = np.argmax(x, axis=-1).tolist()
+        output_idx = ops.index(0)
+        for i in range(output_idx+1, x.shape[0]):
+            x[i] = np.zeros(x.shape[1])
+    except:
+        return None, None
     return a, x
 
 

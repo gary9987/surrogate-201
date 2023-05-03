@@ -308,6 +308,8 @@ def to_loader(datasets, batch_size: int, epochs: int):
 
 def mask_for_model(arch):
     arch['a'], arch['x'] = mask_padding_vertex_for_model(arch['a'], arch['x'])
+    if arch['a'] is None:
+        return None
     return arch
 
 
@@ -324,6 +326,7 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
     num_new_found = 0
     found_arch_list.extend(found_arch_list2)
     found_arch_list = list(map(mask_for_model, found_arch_list))
+    found_arch_list = filter(lambda arch: arch is not None, found_arch_list)
     found_arch_list_set = arch_list_to_set(found_arch_list)
 
     # Predict accuracy by INN (performance predictor)

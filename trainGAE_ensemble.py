@@ -11,7 +11,7 @@ import os
 from datasets.nb201_dataset import NasBench201Dataset
 from datasets.utils import train_valid_test_split_dataset, mask_graph_dataset, arch_list_to_set
 from evalGAE import query_acc_by_ops, ensemble_eval_query_best
-from trainGAE_two_phase import to_loader
+from trainGAE_two_phase import to_loader, mask_for_model, mask_for_spec
 from utils.py_utils import get_logdir_and_logger
 from spektral.data import Graph
 
@@ -200,7 +200,7 @@ class Trainer2(tf.keras.Model):
             ops_cls, adj_cls, kl_loss, y_out, x_encoding = self.model(undirected_x_batch_train, training=True)
 
             # To avoid nan loss when batch size is small
-            reg_loss, latent_loss = tf.cond(tf.shape(nan_mask)[0] != 0,
+            reg_loss, latent_loss = tf.cond(tf.reduce_sum(nan_mask) != tf.shape(nan_mask)[0],
                                             lambda: self.cal_reg_and_latent_loss(y, z, y_out, nan_mask, rank_weight),
                                             lambda: (0., 0.))
 
@@ -220,7 +220,7 @@ class Trainer2(tf.keras.Model):
             self.model.encoder.trainable = False
             self.model.decoder.trainable = False
             # To avoid nan loss when batch size is small
-            rev_loss = tf.cond(tf.shape(nan_mask)[0] != 0,
+            rev_loss = tf.cond(tf.reduce_sum(nan_mask) != tf.shape(nan_mask)[0],
                                lambda: self.cal_rev_loss(undirected_x_batch_train, y, z, nan_mask, 0.0001, rank_weight),
                                lambda: 0.)
             backward_loss = self.w3 * rev_loss
@@ -252,11 +252,11 @@ class Trainer2(tf.keras.Model):
         rank_weight = get_rank_weight(tf.dynamic_partition(y, nan_mask, 2)[0]) if self.is_rank_weight else None
 
         ops_cls, adj_cls, kl_loss, y_out, x_encoding = self.model(undirected_x_batch_train, training=False)
-        reg_loss, latent_loss = tf.cond(tf.shape(nan_mask)[0] != 0,
+        reg_loss, latent_loss = tf.cond(tf.reduce_sum(nan_mask) != tf.shape(nan_mask)[0],
                                         lambda: self.cal_reg_and_latent_loss(y, z, y_out, nan_mask, rank_weight),
                                         lambda: (0., 0.))
         forward_loss = self.w1 * reg_loss + self.w2 * latent_loss
-        rev_loss = tf.cond(tf.shape(nan_mask)[0] != 0,
+        rev_loss = tf.cond(tf.reduce_sum(nan_mask) != tf.shape(nan_mask)[0],
                            lambda: self.cal_rev_loss(undirected_x_batch_train, y, z, nan_mask, 0., rank_weight),
                            lambda: 0.)
         backward_loss = self.w3 * rev_loss
@@ -309,17 +309,32 @@ def train(phase: int, model, loader, train_epochs, logdir, callbacks=None, x_dim
 
 
 def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, top_list, logger, repeat, top_k=5):
-    # Generate total 200 architectures
-    _, _, _, found_arch_list = ensemble_eval_query_best(trainer.model, dataset_name, trainer.x_dim, trainer.z_dim, query_amount=1)
+    # Generate total 10(num_nvp) * query_amount architectures
+    _, _, _, found_arch_list = ensemble_eval_query_best(trainer.model, dataset_name, trainer.x_dim, trainer.z_dim, query_amount=20)
 
     num_new_found = 0
+    found_arch_list = list(map(mask_for_model, found_arch_list))
+    found_arch_list = filter(lambda arch: arch is not None, found_arch_list)
     found_arch_list_set = arch_list_to_set(found_arch_list)
+
+    # Predict accuracy by INN (performance predictor)
+    x = tf.stack([tf.constant(i['x']) for i in found_arch_list_set])
+    a = tf.stack([tf.constant(i['a']) for i in found_arch_list_set])
+    if tf.shape(x)[0] != 0:
+        _, _, _, reg, _ = trainer.model((x, a), training=False)  # (batch, num_nvp, z_dim+y_dim)
+        reg = tf.reduce_mean(reg, axis=1)
+        for i in range(len(found_arch_list_set)):
+            found_arch_list_set[i]['y'] = reg[i][-1].numpy()
 
     # Select top-k to evaluate true label and add to training dataset
     top_acc_list = []
-
+    found_arch_list_set = sorted(found_arch_list_set, key=lambda g: g['y'], reverse=True)[:top_k]
     for idx, i in enumerate(found_arch_list_set):
-        acc = query_acc_by_ops(i['x'], dataset_name)
+        if dataset_name != 'nb101':
+            acc = query_acc_by_ops(i['x'], dataset_name)
+        else:
+            i = mask_for_spec(i)
+            acc = float(datasets['train'].get_metrics(i['a'], np.argmax(i['x'], axis=-1))[1])
         top_acc_list.append(acc)
         found_arch_list_set[idx]['y'] = np.array([acc])
 
@@ -440,7 +455,7 @@ def prepare_model(num_nvp, nvp_config, latent_dim, num_layers, d_model, num_head
 
 
 def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_budget):
-    logdir, logger = get_logdir_and_logger(f'trainGAE_ensemble_{seed}.log')
+    logdir, logger = get_logdir_and_logger(dataset_name, f'trainGAE_ensemble_{seed}.log')
     random_seed = seed
     tf.random.set_seed(random_seed)
     random.seed(random_seed)
