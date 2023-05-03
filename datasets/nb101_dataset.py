@@ -78,7 +78,35 @@ def transform_nb101_data_list_to_graph(records: dict):
 
     with open(os.path.join(file_path, 'nb101_hash_to_metrics.pkl'), 'wb') as f:
         pickle.dump(map_hash_to_metrics, f)
-        
+
+
+def mask_padding_vertex_for_model(a, x):
+    """
+    :param x: (nodes, num_ops)
+    :param a: (nodes, nodes)
+    :return: x: (nodes, num_ops), a: (nodes, nodes)
+    """
+    ops = np.argmax(x, axis=-1).tolist()
+    output_idx = ops.index(0)
+    for i in range(output_idx+1, x.shape[0]):
+        x[i] = np.zeros(x.shape[1])
+
+    return a, x
+
+
+def mask_padding_vertex_for_spec(a, x):
+    """
+    :param x: (nodes, num_ops)
+    :param a: (nodes, nodes)
+    :return: x: (output_idx+1, output_idx+1)
+    """
+    ops = np.argmax(x, axis=-1).tolist()
+    output_idx = ops.index(0)
+    new_x = x[:output_idx+1]
+    new_a = a[:output_idx+1, :output_idx+1]
+
+    return new_a, new_x
+
 
 class NasBench101Dataset(Dataset):
     def __init__(self, start=0, end=423623, root='', **kwargs):
@@ -123,9 +151,10 @@ class NasBench101Dataset(Dataset):
 
     def get_metrics(self, matrix, ops):
         if isinstance(ops[0], int) or isinstance(ops, np.ndarray):
+            ops = list(ops)
             ops = [OPS_by_IDX_NB101[i] for i in ops]
         matrix = np.array(matrix).astype(np.int8)
-        spec_hash = ModelSpec(matrix=matrix, ops=[i for i in ops]).hash_spec(NB101_CANONICAL_OPS)
+        spec_hash = ModelSpec(matrix=matrix, ops=ops).hash_spec(NB101_CANONICAL_OPS)
         return self.hash_to_metrics[spec_hash]
 
 
@@ -137,8 +166,28 @@ if __name__ == '__main__':
         records = pickle.load(f)
 
     print(len(records))  # 423624
-    transform_nb101_data_list_to_graph(records)
+    #transform_nb101_data_list_to_graph(records)
     datasets = NasBench101Dataset(end=1000, root='../')
+    matrix = np.array([[0, 1, 0, 0, 0, 0, 0],
+                       [0, 0, 1, 0, 0, 0, 0],
+                       [0, 0, 0, 0, 0, 0, 0],
+                       [0, 0, 0, 0, 0, 0, 0],
+                       [0, 0, 0, 0, 0, 0, 0],
+                       [0, 0, 0, 0, 0, 0, 0],
+                       [0, 0, 0, 0, 0, 0, 0]])
+
+    ops = np.array([[0, 1, 0, 0, 0],
+                    [0, 0, 1, 0, 0],
+                    [1, 0, 0, 0, 0],
+                    [1, 0, 0, 0, 0],
+                    [1, 0, 0, 0, 0],
+                    [1, 0, 0, 0, 0],
+                    [1, 0, 0, 0, 0]])
+    mask_padding_vertex_for_model(matrix, ops)
+    matrix, ops = mask_padding_vertex_for_spec(matrix, ops)
+    metrics = datasets.get_metrics(matrix, np.argmax(ops, axis=-1))
+    print(metrics)
+
     # The following are identical
     matrix = np.array([[0, 1, 0],
                        [0, 0, 1],
