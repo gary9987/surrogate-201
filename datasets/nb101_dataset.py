@@ -82,6 +82,7 @@ def transform_nb101_data_list_to_graph(records: dict):
 
 def mask_padding_vertex_for_model(a, x):
     """
+    virtual node is padded with 0
     :param x: (nodes, num_ops)
     :param a: (nodes, nodes)
     :return: x: (nodes, num_ops), a: (nodes, nodes)
@@ -96,15 +97,17 @@ def mask_padding_vertex_for_model(a, x):
 
 def mask_padding_vertex_for_spec(a, x):
     """
-    :param x: (nodes, num_ops)
+    :param x: (nodes, num_ops) or (nodes)
     :param a: (nodes, nodes)
     :return: x: (output_idx+1, output_idx+1)
     """
-    ops = np.argmax(x, axis=-1).tolist()
+    if isinstance(x, list):
+        ops = x
+    else:
+        ops = np.argmax(x, axis=-1).tolist()
     output_idx = ops.index(0)
     new_x = x[:output_idx+1]
     new_a = a[:output_idx+1, :output_idx+1]
-
     return new_a, new_x
 
 

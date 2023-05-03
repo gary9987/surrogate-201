@@ -23,7 +23,7 @@ from __future__ import print_function
 
 import copy
 
-from nasbench.lib import graph_util
+from datasets.nasbench_lib import graph_util
 import numpy as np
 
 # Graphviz is optional and only required for visualization.

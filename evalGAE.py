@@ -1,7 +1,7 @@
 from typing import Union
 import numpy as np
 import tensorflow as tf
-from datasets.nb101_dataset import NasBench101Dataset
+from datasets.nb101_dataset import NasBench101Dataset, mask_padding_vertex_for_spec, mask_padding_vertex_for_model
 from datasets.nb201_dataset import NasBench201Dataset, OPS_by_IDX_201
 from datasets.transformation import OnlyValidAccTransform, ReshapeYTransform, OnlyFinalAcc, LabelScale
 from datasets.utils import train_valid_test_split_dataset, ops_list_to_nb201_arch_str
@@ -100,11 +100,14 @@ def eval_query_best(model: tf.keras.Model, dataset_name, x_dim: int, z_dim: int,
             if dataset_name != 'nb101':
                 acc = query_acc_by_ops(ops_idx, dataset_name, is_random=False)
             else:
-                acc = nb101_dataset.get_metrics(adj, ops_idx)[1]
+                adj_for_spec, ops_idx_for_spec = mask_padding_vertex_for_spec(adj, ops_idx)
+                acc = nb101_dataset.get_metrics(adj_for_spec, ops_idx_for_spec)[1]
 
             x.append(query_acc)
             y.append(acc)
-            found_arch_list.append({'x': np.eye(model.num_ops)[ops_idx], 'a': adj, 'y': np.array([acc])})
+
+            adj, ops = mask_padding_vertex_for_model(adj, np.eye(model.num_ops)[ops_idx])
+            found_arch_list.append({'x': ops, 'a': adj, 'y': np.array([acc])})
         except:
             print('invalid')
             invalid += 1

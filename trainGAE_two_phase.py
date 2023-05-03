@@ -9,7 +9,7 @@ from models.TransformerAE import TransformerAutoencoderNVP
 import tensorflow as tf
 import os
 from datasets.nb201_dataset import NasBench201Dataset, OP_PRIMITIVES_NB201
-from datasets.nb101_dataset import NasBench101Dataset, OP_PRIMITIVES_NB101
+from datasets.nb101_dataset import NasBench101Dataset, OP_PRIMITIVES_NB101, mask_padding_vertex_for_spec, mask_padding_vertex_for_model
 from datasets.utils import train_valid_test_split_dataset, mask_graph_dataset, arch_list_to_set
 from spektral.data import BatchLoader
 from evalGAE import eval_query_best, query_acc_by_ops
@@ -306,6 +306,16 @@ def to_loader(datasets, batch_size: int, epochs: int):
     return loader
 
 
+def mask_for_model(arch):
+    arch['a'], arch['x'] = mask_padding_vertex_for_model(arch['a'], arch['x'])
+    return arch
+
+
+def mask_for_spec(arch):
+    arch['a'], arch['x'] = mask_padding_vertex_for_spec(arch['a'], arch['x'])
+    return arch
+
+
 def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, top_list, logger, repeat, top_k=5):
     # Generate total 200 architectures
     _, _, _, found_arch_list = eval_query_best(trainer.model, dataset_name, trainer.x_dim, trainer.z_dim, query_amount=100)
@@ -313,6 +323,7 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
                                                 trainer.z_dim, query_amount=100, noise_scale=0.05)
     num_new_found = 0
     found_arch_list.extend(found_arch_list2)
+    found_arch_list = list(map(mask_for_model, found_arch_list))
     found_arch_list_set = arch_list_to_set(found_arch_list)
 
     # Predict accuracy by INN (performance predictor)
@@ -330,6 +341,7 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
         if dataset_name != 'nb101':
             acc = query_acc_by_ops(i['x'], dataset_name)
         else:
+            i = mask_for_spec(i)
             acc = float(datasets['train'].get_metrics(i['a'], np.argmax(i['x'], axis=-1))[1])
         top_acc_list.append(acc)
         found_arch_list_set[idx]['y'] = np.array([acc])
