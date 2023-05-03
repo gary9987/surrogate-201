@@ -430,8 +430,9 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     top_k = 5
 
     is_only_validation_data = True
-    train_phase = [1, 0]  # 0 not train, 1 train
-    pretrained_weight = 'logs/phase1_model_cifar100/modelGAE_weights_phase1'
+    train_phase = [0, 1]  # 0 not train, 1 train
+    #pretrained_weight = 'logs/phase1_model_cifar100/modelGAE_weights_phase1'
+    pretrained_weight = 'logs/nb101/nb101_phase1/modelGAE_weights_phase1'
 
     retrain_epochs = 20
     eps_scale = 0.05  # 0.1
@@ -511,10 +512,10 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         logger.info(f'{dict(zip(trainer.metrics_names, results))}')
     else:
         pretrained_model.load_weights(pretrained_weight)
+        #model.load_weights(pretrained_weight)
 
     # Load AE weights from pretrained model
     model.encoder.set_weights(pretrained_model.encoder.get_weights())
-    #model.nvp.set_weights(pretrained_model.nvp.get_weights())
     model.decoder.set_weights(pretrained_model.decoder.get_weights())
 
     global_top_acc_list = []
