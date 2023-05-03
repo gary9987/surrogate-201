@@ -187,7 +187,7 @@ class Trainer2(tf.keras.Model):
             ops_cls, adj_cls, kl_loss, y_out, x_encoding = self.model(undirected_x_batch_train, training=True)
 
             # To avoid nan loss when batch size is small
-            reg_loss, latent_loss = tf.cond(tf.shape(nan_mask)[0] != 0,
+            reg_loss, latent_loss = tf.cond(tf.reduce_sum(nan_mask) != tf.shape(nan_mask)[0],
                                             lambda: self.cal_reg_and_latent_loss(y, z, y_out, nan_mask, rank_weight),
                                             lambda: (0., 0.))
 
@@ -207,7 +207,7 @@ class Trainer2(tf.keras.Model):
             self.model.encoder.trainable = False
             self.model.decoder.trainable = False
             # To avoid nan loss when batch size is small
-            rev_loss = tf.cond(tf.shape(nan_mask)[0] != 0,
+            rev_loss = tf.cond(tf.reduce_sum(nan_mask) != tf.shape(nan_mask)[0],
                                lambda: self.cal_rev_loss(undirected_x_batch_train, y, z, nan_mask, 0.0001, rank_weight),
                                lambda: 0.)
             backward_loss = self.w3 * rev_loss
@@ -239,11 +239,11 @@ class Trainer2(tf.keras.Model):
         rank_weight = get_rank_weight(tf.dynamic_partition(y, nan_mask, 2)[0]) if self.is_rank_weight else None
 
         ops_cls, adj_cls, kl_loss, y_out, x_encoding = self.model(undirected_x_batch_train, training=False)
-        reg_loss, latent_loss = tf.cond(tf.shape(nan_mask)[0] != 0,
+        reg_loss, latent_loss = tf.cond(tf.reduce_sum(nan_mask) != tf.shape(nan_mask)[0],
                                         lambda: self.cal_reg_and_latent_loss(y, z, y_out, nan_mask, rank_weight),
                                         lambda: (0., 0.))
         forward_loss = self.w1 * reg_loss + self.w2 * latent_loss
-        rev_loss = tf.cond(tf.shape(nan_mask)[0] != 0,
+        rev_loss = tf.cond(tf.reduce_sum(nan_mask) != tf.shape(nan_mask)[0],
                            lambda: self.cal_rev_loss(undirected_x_batch_train, y, z, nan_mask, 0., rank_weight),
                            lambda: 0.)
         backward_loss = self.w3 * rev_loss
