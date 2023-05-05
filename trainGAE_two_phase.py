@@ -150,7 +150,9 @@ class Trainer2(tf.keras.Model):
                                        tf.dynamic_partition(tf.concat([y_out[:, :self.z_dim], y_out[:, -self.y_dim:]], axis=-1),
                                                  nan_mask, 2)[0])  # * x_batch_train.shape[0]
         if self.is_rank_weight:
+            # reg_loss (batch_size)
             reg_loss = tf.multiply(reg_loss, rank_weight)
+            reg_loss = tf.reduce_sum(reg_loss)
         return reg_loss, latent_loss
 
     def cal_rev_loss(self, undirected_x_batch_train, y, z, nan_mask, noise_scale, rank_weight=None):
@@ -161,7 +163,9 @@ class Trainer2(tf.keras.Model):
         x_rev = self.model.inverse(tf.concat([z, y], axis=-1))
         rev_loss = self.loss_backward(x_rev, tf.dynamic_partition(x_encoding, nan_mask, 2)[0])  # * x_batch_train.shape[0]
         if self.is_rank_weight:
+            # rev_loss (batch_size)
             rev_loss = tf.multiply(rev_loss, rank_weight)
+            rev_loss = tf.reduce_sum(rev_loss)
         return rev_loss
 
     def train_step(self, data):

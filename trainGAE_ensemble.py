@@ -160,7 +160,9 @@ class Trainer2(tf.keras.Model):
         latent_loss = tf.reduce_mean(tf.vectorized_map(lambda x: self.loss_latent(x[0], x[1]), (zy, pred_zy)))
 
         if self.is_rank_weight:
-            reg_loss = tf.multiply(reg_loss, rank_weight)
+            # reg_loss (batch_size, num_nvp)
+            reg_loss = tf.multiply(reg_loss, tf.broadcast_to(tf.expand_dims(rank_weight, -1), tf.shape(reg_loss)))
+            reg_loss = tf.reduce_sum(tf.reduce_mean(reg_loss, axis=-1))
         return reg_loss, latent_loss
 
     def cal_rev_loss(self, undirected_x_batch_train, y, z, nan_mask, noise_scale, rank_weight=None):
@@ -174,7 +176,9 @@ class Trainer2(tf.keras.Model):
         x_encoding = tf.repeat(x_encoding, repeats=tf.shape(x_rev)[1], axis=1)
         rev_loss = self.loss_backward(x_encoding, x_rev)  # * x_batch_train.shape[0]
         if self.is_rank_weight:
-            rev_loss = tf.multiply(rev_loss, rank_weight)
+            # rev_loss (batch_size, num_nvp)
+            tf.multiply(rev_loss, tf.broadcast_to(tf.expand_dims(rank_weight, -1), tf.shape(rev_loss)))
+            rev_loss = tf.reduce_sum(tf.reduce_mean(rev_loss, axis=-1))
         return rev_loss
 
     def train_step(self, data):
