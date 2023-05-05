@@ -526,16 +526,22 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     global_top_acc_list = []
     global_top_arch_list = []
     if train_phase[1]:
-        batch_size = 256
+        if finetune:
+            batch_size = 256
+        else:
+            batch_size = 64
         repeat_label = 20
         now_queried = train_sample_amount + valid_sample_amount
         logger.info('Train phase 2')
         datasets['train'] = mask_graph_dataset(datasets['train'], train_sample_amount, repeat_label, random_seed=random_seed)
         datasets['valid'] = mask_graph_dataset(datasets['valid'], valid_sample_amount, repeat_label, random_seed=random_seed)
+        if not finetune:
+            datasets['train'].filter(lambda g: not np.isnan(g.y))
+            datasets['valid'].filter(lambda g: not np.isnan(g.y))
 
         loader = to_loader(datasets, batch_size, train_epochs)
         callbacks = [CSVLogger(os.path.join(logdir, f"learning_curve_phase2.csv")),
-                     tensorboard_callback,
+                     #tensorboard_callback,
                      tf.keras.callbacks.ReduceLROnPlateau(monitor='val_total_loss', factor=0.1, patience=50, verbose=1,
                                                           min_lr=1e-5),
                      EarlyStopping(monitor='val_total_loss', patience=patience, restore_best_weights=True)]
@@ -556,7 +562,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         # Reset the lr for retrain
         top_list = []
         run = 0
-        while now_queried < query_budget:
+        while now_queried < query_budget and run <= 100:
             logger.info('')
             logger.info(f'Retrain run {run}')
             top_acc_list, top_arch_list, num_new_found = retrain(trainer, datasets, dataset_name, batch_size,
