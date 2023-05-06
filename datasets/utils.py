@@ -1,5 +1,6 @@
+import copy
+import random
 import numpy as np
-
 from datasets.bananas_path_encoding_nb201 import Cell
 from datasets.nb201_dataset import OPS_by_IDX_201
 
@@ -130,22 +131,37 @@ def to_latent_feature_data(graph_dataset, reg_size):
 
 
 def mask_graph_dataset(graph_dataset, reg_size: int, non_nan_repeat: int, random_seed=0):
+    new_dataset = copy.copy(graph_dataset)
     if reg_size == -1:
         nan_size = 0
     else:
-        nan_size = len(graph_dataset) - reg_size
+        nan_size = len(new_dataset) - reg_size
 
     np.random.seed(random_seed)
-    to_nan_idx = np.random.choice(range(len(graph_dataset)), nan_size, replace=False)
+    to_nan_idx = np.random.choice(range(len(new_dataset)), nan_size, replace=False)
 
-    for i in range(len(graph_dataset)):
+    for i in range(len(new_dataset)):
         if i in to_nan_idx:
-            graph_dataset[i].y = np.array([np.nan])
+            new_dataset[i].y = np.array([np.nan])
         else:
             for _ in range(non_nan_repeat - 1):
-                graph_dataset += graph_dataset[i:i+1]
+                new_dataset += new_dataset[i:i+1]
 
-    return graph_dataset
+    return new_dataset
+
+
+def rand_weighted_dataset(graph_dataset, sample_size: int, weight_factor=10e-3):
+    acc_list = []
+    for i in graph_dataset:
+        acc_list.append(i.y[-1])
+
+    outputs_argsort = np.argsort(-np.asarray(acc_list))
+    ranks = np.argsort(outputs_argsort)
+    weights = 1 / (weight_factor * len(graph_dataset.graphs) + ranks)
+    weighted_sample = random.choices(graph_dataset.graphs, weights=weights, k=sample_size)
+    new_dataset = copy.copy(graph_dataset)
+    new_dataset.graphs = weighted_sample
+    return new_dataset
 
 
 def arch_list_to_set(arch_list):

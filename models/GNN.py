@@ -203,7 +203,7 @@ def get_rank_weight(y_true):
     rank = tf.subtract(y_true, tf.transpose(y_true))
     rank = tf.where(rank < 0, 1., 0.)
     rank = tf.reduce_sum(rank, axis=1)
-    weight = tf.math.reciprocal(rank + tf.cast(N, tf.float32) * 1e-3)
+    weight = tf.math.reciprocal(rank + tf.cast(N, tf.float32) * 10e-3)
     return weight
 
 
