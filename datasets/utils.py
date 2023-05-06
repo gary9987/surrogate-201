@@ -1,3 +1,5 @@
+import copy
+
 import numpy as np
 
 from datasets.bananas_path_encoding_nb201 import Cell
@@ -130,22 +132,23 @@ def to_latent_feature_data(graph_dataset, reg_size):
 
 
 def mask_graph_dataset(graph_dataset, reg_size: int, non_nan_repeat: int, random_seed=0):
+    new_graph_dataset = copy.copy(graph_dataset)
     if reg_size == -1:
         nan_size = 0
     else:
-        nan_size = len(graph_dataset) - reg_size
+        nan_size = len(new_graph_dataset) - reg_size
 
     np.random.seed(random_seed)
-    to_nan_idx = np.random.choice(range(len(graph_dataset)), nan_size, replace=False)
+    to_nan_idx = np.random.choice(range(len(new_graph_dataset)), nan_size, replace=False)
 
-    for i in range(len(graph_dataset)):
+    for i in range(len(new_graph_dataset)):
         if i in to_nan_idx:
-            graph_dataset[i].y = np.array([np.nan])
+            new_graph_dataset[i].y = np.array([np.nan])
         else:
             for _ in range(non_nan_repeat - 1):
-                graph_dataset += graph_dataset[i:i+1]
+                new_graph_dataset += new_graph_dataset[i:i+1]
 
-    return graph_dataset
+    return new_graph_dataset
 
 
 def arch_list_to_set(arch_list):
