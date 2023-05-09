@@ -1,4 +1,5 @@
 import argparse
+import copy
 import random
 import numpy as np
 from tensorflow.python.keras.callbacks import CSVLogger, EarlyStopping
@@ -15,6 +16,7 @@ from spektral.data import BatchLoader
 from evalGAE import eval_query_best, query_acc_by_ops
 from utils.py_utils import get_logdir_and_logger
 from spektral.data import Graph
+from utils.tf_utils import to_undiredted_adj
 
 
 def parse_args():
@@ -34,11 +36,6 @@ def cal_ops_adj_loss_for_graph(x_batch_train, ops_cls, adj_cls):
     ops_loss = tf.keras.losses.KLDivergence()(ops_label, ops_cls)
     adj_loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)(adj_label, adj_cls)
     return ops_loss, adj_loss
-
-
-def to_undiredted_adj(adj):
-    undirected_adj = tf.cast(tf.cast(adj, tf.int32) | tf.cast(tf.transpose(adj, perm=[0, 2, 1]), tf.int32), tf.float32)
-    return undirected_adj
 
 
 class Trainer1(tf.keras.Model):
@@ -318,8 +315,9 @@ def mask_for_model(arch):
 
 
 def mask_for_spec(arch):
-    arch['a'], arch['x'] = mask_padding_vertex_for_spec(arch['a'], arch['x'])
-    return arch
+    new_arch = copy.copy(arch)
+    new_arch['a'], new_arch['x'] = mask_padding_vertex_for_spec(new_arch['a'], new_arch['x'])
+    return new_arch
 
 
 def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, top_list, logger, repeat, top_k=5):
@@ -350,8 +348,8 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
         if dataset_name != 'nb101':
             acc = query_acc_by_ops(i['x'], dataset_name)
         else:
-            i = mask_for_spec(i)
-            acc = float(datasets['train'].get_metrics(i['a'], np.argmax(i['x'], axis=-1))[1])
+            new_i = mask_for_spec(i)
+            acc = float(datasets['train'].get_metrics(new_i['a'], np.argmax(new_i['x'], axis=-1))[1])
         top_acc_list.append(acc)
         found_arch_list_set[idx]['y'] = np.array([acc])
 
@@ -371,6 +369,7 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
                 datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * repeat)
                 top_list.append(i['x'].tolist())
                 logger.info(f'Data not in train and not in top_list {i["y"].tolist()}')
+                logger.info(f'Add to train {i["x"].tolist()} {i["a"].tolist()} {i["y"].tolist()}')
                 num_new_found += 1
             elif i['x'].tolist() not in top_list and not np.isnan(train_dict[str(i['x'].tolist())]):
                 logger.info(f'Data in train but not in top_list {i["y"].tolist()}')
@@ -381,6 +380,7 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
         else:
             if i['x'].tolist() not in top_list:
                 logger.info(f'Data not in train and not in top_list {i["y"].tolist()}')
+                logger.info(f'Add to train {i["x"].tolist()} {i["a"].tolist()} {i["y"].tolist()}')
                 datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * repeat)
                 top_list.append(i['x'].tolist())
                 num_new_found += 1
