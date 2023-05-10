@@ -308,14 +308,15 @@ def to_loader(datasets, batch_size: int, epochs: int):
 
 
 def mask_for_model(arch):
-    arch['a'], arch['x'] = mask_padding_vertex_for_model(arch['a'], arch['x'])
-    if arch['a'] is None:
+    new_arch = copy.deepcopy(arch)
+    new_arch['a'], new_arch['x'] = mask_padding_vertex_for_model(new_arch['a'], new_arch['x'])
+    if new_arch['a'] is None:
         return None
-    return arch
+    return new_arch
 
 
 def mask_for_spec(arch):
-    new_arch = copy.copy(arch)
+    new_arch = copy.deepcopy(arch)
     new_arch['a'], new_arch['x'] = mask_padding_vertex_for_spec(new_arch['a'], new_arch['x'])
     return new_arch
 
@@ -329,13 +330,14 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
     found_arch_list.extend(found_arch_list2)
     if dataset_name == 'nb101':
         found_arch_list = list(map(mask_for_model, found_arch_list))
-        found_arch_list = filter(lambda arch: arch is not None, found_arch_list)
+        found_arch_list = filter(lambda arch: arch is not None and arch['x'] is not None, found_arch_list)
 
     found_arch_list_set = arch_list_to_set(found_arch_list)
 
     # Predict accuracy by INN (performance predictor)
     x = tf.stack([tf.constant(i['x']) for i in found_arch_list_set])
     a = tf.stack([tf.constant(i['a']) for i in found_arch_list_set])
+    a = to_undiredted_adj(a)
     if tf.shape(x)[0] != 0:
         _, _, _, reg, _ = trainer.model((x, a), training=False)
         for i in range(len(found_arch_list_set)):
@@ -590,7 +592,8 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         if dataset_name != 'nb101':
             acc = query_acc_by_ops(i['x'], dataset_name, is_random=False, on='test-accuracy')
         else:
-            acc = float(datasets['train'].get_metrics(i['a'], np.argmax(i['x'], axis=-1))[2])
+            new_i = mask_for_spec(i)
+            acc = float(datasets['train'].get_metrics(new_i['a'], np.argmax(new_i['x'], axis=-1))[2])
         top_test_acc_list.append(acc)
 
     logger.info(f'Avg test acc {sum(top_test_acc_list) / len(top_test_acc_list)}')
