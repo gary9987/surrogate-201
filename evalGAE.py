@@ -106,7 +106,11 @@ def eval_query_best(model: tf.keras.Model, dataset_name, x_dim: int, z_dim: int,
             x.append(query_acc)
             y.append(acc)
 
-            adj, ops = mask_padding_vertex_for_model(adj, np.eye(model.num_ops)[ops_idx])
+            if dataset_name == 'nb101':
+                adj, ops = mask_padding_vertex_for_model(adj, np.eye(model.num_ops)[ops_idx])
+            else:
+                ops = np.eye(model.num_ops)[ops_idx]
+
             if adj is not None and ops is not None:
                 found_arch_list.append({'x': ops, 'a': adj, 'y': np.array([acc])})
         except:

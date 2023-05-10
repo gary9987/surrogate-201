@@ -1,7 +1,13 @@
 .idea
 logs
+Experiments
+.vscode
+*.png
 NasBench201Dataset
 NasBench201Dataset.zip
+NasBench101Dataset
+NasBench101Dataset_new
+NasBench101Dataset_new.zip
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

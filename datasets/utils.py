@@ -151,6 +151,13 @@ def mask_graph_dataset(graph_dataset, reg_size: int, non_nan_repeat: int, random
     return new_graph_dataset
 
 
+def repeat_graph_dataset_element(graph_dataset, num_repeat: int):
+    new_graph_dataset = copy.deepcopy(graph_dataset)
+    for _ in range(num_repeat - 1):
+        new_graph_dataset += graph_dataset
+    return new_graph_dataset
+
+
 def arch_list_to_set(arch_list):
     arch_list_set = []
     visited = []
