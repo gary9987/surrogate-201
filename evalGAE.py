@@ -112,7 +112,9 @@ def eval_query_best(model: tf.keras.Model, dataset_name, x_dim: int, z_dim: int,
                 ops = np.eye(model.num_ops)[ops_idx]
 
             if adj is not None and ops is not None:
-                found_arch_list.append({'x': ops, 'a': adj, 'y': np.array([acc])})
+                found_arch_list.append({'x': ops.astype(np.float32),
+                                        'a': adj.astype(np.float32),
+                                        'y': np.array([acc]).astype(np.float32)})
         except:
             print('invalid')
             invalid += 1

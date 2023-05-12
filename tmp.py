@@ -1,17 +1,18 @@
 import argparse
 import copy
+import pickle
 import random
 import numpy as np
 from tensorflow.python.keras.callbacks import CSVLogger, EarlyStopping
 from datasets.transformation import ReshapeYTransform, OnlyValidAccTransform, OnlyFinalAcc, LabelScale
-from invertible_neural_networks.flow import MMD_multiscale
-from models.GNN import GraphAutoencoder, GraphAutoencoderNVP, get_rank_weight
+from invertible_neural_networks.flow import MSE, MMD_multiscale
+from models.GNN import GraphAutoencoder, GraphAutoencoderNVP, weighted_mse, get_rank_weight
 from models.TransformerAE import TransformerAutoencoderNVP
 import tensorflow as tf
 import os
 from datasets.nb201_dataset import NasBench201Dataset, OP_PRIMITIVES_NB201
 from datasets.nb101_dataset import NasBench101Dataset, OP_PRIMITIVES_NB101, mask_padding_vertex_for_spec, mask_padding_vertex_for_model
-from datasets.utils import train_valid_test_split_dataset, mask_graph_dataset, arch_list_to_set, graph_to_str
+from datasets.utils import train_valid_test_split_dataset, mask_graph_dataset, arch_list_to_set, repeat_graph_dataset_element
 from spektral.data import BatchLoader
 from evalGAE import eval_query_best, query_acc_by_ops
 from utils.py_utils import get_logdir_and_logger
@@ -23,7 +24,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--train_sample_amount', type=int, default=50, help='Number of samples to train (default: 250)')
     parser.add_argument('--valid_sample_amount', type=int, default=50, help='Number of samples to train (default: 50)')
-    parser.add_argument('--query_budget', type=int, default=400)
+    parser.add_argument('--query_budget', type=int, default=192)
     parser.add_argument('--dataset', type=str, default='cifar10-valid')
     parser.add_argument('--seed', type=int, default=0)
     return parser.parse_args()
@@ -337,7 +338,6 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
     # Predict accuracy by INN (performance predictor)
     x = tf.stack([tf.constant(i['x']) for i in found_arch_list_set])
     a = tf.stack([tf.constant(i['a']) for i in found_arch_list_set])
-    a = to_undiredted_adj(a)
     if tf.shape(x)[0] != 0:
         _, _, _, reg, _ = trainer.model((x, a), training=False)
         for i in range(len(found_arch_list_set)):
@@ -362,30 +362,29 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
     else:
         logger.info('Top acc list is [] in this run')
 
-    train_dict = {graph_to_str(i): i.y.tolist() for i in datasets['train'].graphs}
+    train_dict = {str(i.x.tolist()): i.y.tolist() for i in datasets['train'].graphs}
 
     # Add top found architecture to training dataset
     for i in found_arch_list_set:
-        graph_str = graph_to_str(i)
-        if graph_str in train_dict:
-            if graph_str not in top_list and np.isnan(train_dict[graph_str]):
+        if str(i['x'].tolist()) in train_dict:
+            if i['x'].tolist() not in top_list and np.isnan(train_dict[str(i['x'].tolist())]):
                 datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * repeat)
-                top_list.append(graph_str)
+                top_list.append(i['x'].tolist())
                 logger.info(f'Data not in train and not in top_list {i["y"].tolist()}')
                 logger.info(f'Add to train {i["x"].tolist()} {i["a"].tolist()} {i["y"].tolist()}')
                 num_new_found += 1
-            elif graph_str not in top_list and not np.isnan(train_dict[graph_str]):
+            elif i['x'].tolist() not in top_list and not np.isnan(train_dict[str(i['x'].tolist())]):
                 logger.info(f'Data in train but not in top_list {i["y"].tolist()}')
                 # datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * 10)
-                top_list.append(graph_str)
+                top_list.append(i['x'].tolist())
             else:
                 logger.info(f'Data in train and in top_list {i["y"].tolist()}')
         else:
-            if graph_str not in top_list:
+            if i['x'].tolist() not in top_list:
                 logger.info(f'Data not in train and not in top_list {i["y"].tolist()}')
                 logger.info(f'Add to train {i["x"].tolist()} {i["a"].tolist()} {i["y"].tolist()}')
                 datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * repeat)
-                top_list.append(graph_str)
+                top_list.append(i['x'].tolist())
                 num_new_found += 1
 
     logger.info(f'{datasets["train"]}')
@@ -443,10 +442,8 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
 
     is_only_validation_data = True
     train_phase = [0, 1]  # 0 not train, 1 train
-    if dataset_name == 'nb101':
-        pretrained_weight = 'logs/nb101/nb101_phase1/modelGAE_weights_phase1'
-    else:
-        pretrained_weight = 'logs/phase1_model_cifar100/modelGAE_weights_phase1'
+    pretrained_weight = 'logs/phase1_model_cifar100/modelGAE_weights_phase1'
+    #pretrained_weight = 'logs/nb101/nb101_phase1/modelGAE_weights_phase1'
 
     retrain_epochs = 20
     eps_scale = 0.05  # 0.1
@@ -455,8 +452,8 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     dff = 256
     num_layers = 3
     num_heads = 3
-    finetune = True
-    retrain_finetune = True
+    finetune = False
+    retrain_finetune = False
     latent_dim = 16
 
     train_epochs = 1000
@@ -499,9 +496,9 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     #pad_dim = tot_dim - x_dim  # 14
 
     nvp_config = {
-        'n_couple_layer': 4,
+        'n_couple_layer': 2,
         'n_hid_layer': 4,
-        'n_hid_dim': 256,
+        'n_hid_dim': 64,
         'name': 'NVP',
         'inp_dim': tot_dim
     }
@@ -540,10 +537,18 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         else:
             batch_size = 64
         repeat_label = 20
-        now_queried = train_sample_amount + valid_sample_amount
         logger.info('Train phase 2')
-        datasets['train'] = mask_graph_dataset(datasets['train'], train_sample_amount, repeat_label, random_seed=random_seed)
+        datasets['train_1'] = mask_graph_dataset(datasets['train'], train_sample_amount, 1,
+                                               random_seed=random_seed)
+        datasets['valid_1'] = mask_graph_dataset(datasets['valid'], valid_sample_amount, 1,
+                                               random_seed=random_seed)
+        datasets['train_1'].filter(lambda g: not np.isnan(g.y))
+        datasets['valid_1'].filter(lambda g: not np.isnan(g.y))
+        #datasets['train_1'].graphs = datasets['train_1'].graphs[:20]
+        #datasets['train_1'].graphs = datasets['train_1'].graphs[20:]
+        datasets['train'] = repeat_graph_dataset_element(datasets['train_1'], repeat_label)
         datasets['valid'] = mask_graph_dataset(datasets['valid'], valid_sample_amount, repeat_label, random_seed=random_seed)
+
         if not finetune:
             datasets['train'].filter(lambda g: not np.isnan(g.y))
             datasets['valid'].filter(lambda g: not np.isnan(g.y))
@@ -559,50 +564,12 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
         logger.info(str(dict(zip(trainer.metrics_names, results))))
 
-        # Recreate Trainer for retrain
-        retrain_model.set_weights(model.get_weights())
-        trainer = Trainer2(retrain_model, x_dim, y_dim, z_dim, finetune=retrain_finetune, is_rank_weight=False)
-        trainer.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3), run_eagerly=False)
-        '''
-        if not retrain_finetune:
-            datasets['train'].filter(lambda g: not np.isnan(g.y))
-            datasets['valid'].filter(lambda g: not np.isnan(g.y))
-        '''
-        # Reset the lr for retrain
-        top_list = []
-        run = 0
-        while now_queried < query_budget and run <= 100:
-            logger.info('')
-            logger.info(f'Retrain run {run}')
-            top_acc_list, top_arch_list, num_new_found = retrain(trainer, datasets, dataset_name, batch_size,
-                                                                 retrain_epochs, logdir, top_list, logger,
-                                                                 repeat_label, top_k)
-            now_queried += num_new_found
-            if now_queried > query_budget:
-                break
-            global_top_acc_list += top_acc_list
-            global_top_arch_list += top_arch_list
-            run += 1
+        with open(os.path.join(logdir, 'datasets.pkl'), 'wb') as f:
+            pickle.dump(datasets, f)
+        with open(os.path.join(logdir, 'model.pkl'), 'wb') as f:
+            pickle.dump(model, f)
     else:
         model.load_weights(pretrained_weight)
-
-    #invalid, avg_acc, best_acc, found_arch_list = eval_query_best(model, x_dim, z_dim, query_amount=10)
-    logger.info('Final result')
-    logger.info(f'Avg found acc {sum(global_top_acc_list) / len(global_top_acc_list)}')
-    logger.info(f'Best found acc {max(global_top_acc_list)}')
-    top_test_acc_list = []
-    for i in global_top_arch_list:
-        if dataset_name != 'nb101':
-            acc = query_acc_by_ops(i['x'], dataset_name, is_random=False, on='test-accuracy')
-        else:
-            new_i = mask_for_spec(i)
-            acc = float(datasets['train'].get_metrics(new_i['a'], np.argmax(new_i['x'], axis=-1))[2])
-        top_test_acc_list.append(acc)
-
-    logger.info(f'Avg test acc {sum(top_test_acc_list) / len(top_test_acc_list)}')
-    logger.info(f'Best test acc {max(top_test_acc_list)}')
-
-    return sum(global_top_acc_list) / len(global_top_acc_list), max(global_top_acc_list), sum(top_test_acc_list) / len(top_test_acc_list), max(top_test_acc_list)
 
 
 if __name__ == '__main__':
