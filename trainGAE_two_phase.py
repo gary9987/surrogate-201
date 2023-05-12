@@ -4,14 +4,14 @@ import random
 import numpy as np
 from tensorflow.python.keras.callbacks import CSVLogger, EarlyStopping
 from datasets.transformation import ReshapeYTransform, OnlyValidAccTransform, OnlyFinalAcc, LabelScale
-from invertible_neural_networks.flow import MSE, MMD_multiscale
-from models.GNN import GraphAutoencoder, GraphAutoencoderNVP, weighted_mse, get_rank_weight
+from invertible_neural_networks.flow import MMD_multiscale
+from models.GNN import GraphAutoencoder, GraphAutoencoderNVP, get_rank_weight
 from models.TransformerAE import TransformerAutoencoderNVP
 import tensorflow as tf
 import os
 from datasets.nb201_dataset import NasBench201Dataset, OP_PRIMITIVES_NB201
 from datasets.nb101_dataset import NasBench101Dataset, OP_PRIMITIVES_NB101, mask_padding_vertex_for_spec, mask_padding_vertex_for_model
-from datasets.utils import train_valid_test_split_dataset, mask_graph_dataset, arch_list_to_set
+from datasets.utils import train_valid_test_split_dataset, mask_graph_dataset, arch_list_to_set, graph_to_str
 from spektral.data import BatchLoader
 from evalGAE import eval_query_best, query_acc_by_ops
 from utils.py_utils import get_logdir_and_logger
@@ -21,7 +21,7 @@ from utils.tf_utils import to_undiredted_adj
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--train_sample_amount', type=int, default=250, help='Number of samples to train (default: 250)')
+    parser.add_argument('--train_sample_amount', type=int, default=50, help='Number of samples to train (default: 250)')
     parser.add_argument('--valid_sample_amount', type=int, default=50, help='Number of samples to train (default: 50)')
     parser.add_argument('--query_budget', type=int, default=400)
     parser.add_argument('--dataset', type=str, default='cifar10-valid')
@@ -362,29 +362,30 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
     else:
         logger.info('Top acc list is [] in this run')
 
-    train_dict = {str(i.x.tolist()): i.y.tolist() for i in datasets['train'].graphs}
+    train_dict = {graph_to_str(i): i.y.tolist() for i in datasets['train'].graphs}
 
     # Add top found architecture to training dataset
     for i in found_arch_list_set:
-        if str(i['x'].tolist()) in train_dict:
-            if i['x'].tolist() not in top_list and np.isnan(train_dict[str(i['x'].tolist())]):
+        graph_str = graph_to_str(i)
+        if graph_str in train_dict:
+            if graph_str not in top_list and np.isnan(train_dict[graph_str]):
                 datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * repeat)
-                top_list.append(i['x'].tolist())
+                top_list.append(graph_str)
                 logger.info(f'Data not in train and not in top_list {i["y"].tolist()}')
                 logger.info(f'Add to train {i["x"].tolist()} {i["a"].tolist()} {i["y"].tolist()}')
                 num_new_found += 1
-            elif i['x'].tolist() not in top_list and not np.isnan(train_dict[str(i['x'].tolist())]):
+            elif graph_str not in top_list and not np.isnan(train_dict[graph_str]):
                 logger.info(f'Data in train but not in top_list {i["y"].tolist()}')
                 # datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * 10)
-                top_list.append(i['x'].tolist())
+                top_list.append(graph_str)
             else:
                 logger.info(f'Data in train and in top_list {i["y"].tolist()}')
         else:
-            if i['x'].tolist() not in top_list:
+            if graph_str not in top_list:
                 logger.info(f'Data not in train and not in top_list {i["y"].tolist()}')
                 logger.info(f'Add to train {i["x"].tolist()} {i["a"].tolist()} {i["y"].tolist()}')
                 datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * repeat)
-                top_list.append(i['x'].tolist())
+                top_list.append(graph_str)
                 num_new_found += 1
 
     logger.info(f'{datasets["train"]}')
@@ -442,8 +443,10 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
 
     is_only_validation_data = True
     train_phase = [0, 1]  # 0 not train, 1 train
-    #pretrained_weight = 'logs/phase1_model_cifar100/modelGAE_weights_phase1'
-    pretrained_weight = 'logs/nb101/nb101_phase1/modelGAE_weights_phase1'
+    if dataset_name == 'nb101':
+        pretrained_weight = 'logs/nb101/nb101_phase1/modelGAE_weights_phase1'
+    else:
+        pretrained_weight = 'logs/phase1_model_cifar100/modelGAE_weights_phase1'
 
     retrain_epochs = 20
     eps_scale = 0.05  # 0.1

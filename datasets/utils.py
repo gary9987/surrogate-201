@@ -1,7 +1,6 @@
 import copy
-
 import numpy as np
-
+from spektral.data import Graph
 from datasets.bananas_path_encoding_nb201 import Cell
 from datasets.nb201_dataset import OPS_by_IDX_201
 
@@ -158,11 +157,23 @@ def repeat_graph_dataset_element(graph_dataset, num_repeat: int):
     return new_graph_dataset
 
 
+def graph_to_str(graph):
+    if isinstance(graph, dict):
+        return str(graph['x'].tolist()) + str(graph['a'].tolist())
+    elif isinstance(graph, Graph):
+        return str(graph.x.tolist()) + str(graph.a.tolist())
+    else:
+        raise ValueError('graph type error')
+
+
 def arch_list_to_set(arch_list):
     arch_list_set = []
     visited = []
     for i in arch_list:
-        if str(i['x'].tolist()) not in visited:
+        if graph_to_str(i) not in visited:
             arch_list_set.append(i)
-            visited.append(str(i['x'].tolist()))
+            visited.append(graph_to_str(i))
     return arch_list_set
+
+
+
