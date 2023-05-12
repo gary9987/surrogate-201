@@ -14,13 +14,15 @@ from evalGAE import query_acc_by_ops, ensemble_eval_query_best
 from trainGAE_two_phase import to_loader, mask_for_model, mask_for_spec
 from utils.py_utils import get_logdir_and_logger
 from spektral.data import Graph
+from utils.tf_utils import to_undiredted_adj
+from cal_upper_bound import after_theta_mse
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--train_sample_amount', type=int, default=250, help='Number of samples to train (default: 250)')
+    parser.add_argument('--train_sample_amount', type=int, default=50, help='Number of samples to train (default: 50)')
     parser.add_argument('--valid_sample_amount', type=int, default=50, help='Number of samples to train (default: 50)')
-    parser.add_argument('--query_budget', type=int, default=400)
+    parser.add_argument('--query_budget', type=int, default=192)
     parser.add_argument('--dataset', type=str, default='cifar10-valid')
     parser.add_argument('--seed', type=int, default=0)
     return parser.parse_args()
@@ -33,11 +35,6 @@ def cal_ops_adj_loss_for_graph(x_batch_train, ops_cls, adj_cls):
     ops_loss = tf.keras.losses.KLDivergence()(ops_label, ops_cls)
     adj_loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)(adj_label, adj_cls)
     return ops_loss, adj_loss
-
-
-def to_undiredted_adj(adj):
-    undirected_adj = tf.cast(tf.cast(adj, tf.int32) | tf.cast(tf.transpose(adj, perm=[0, 2, 1]), tf.int32), tf.float32)
-    return undirected_adj
 
 
 class Trainer1(tf.keras.Model):
@@ -315,7 +312,9 @@ def train(phase: int, model, loader, train_epochs, logdir, callbacks=None, x_dim
 def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, top_list, logger, repeat, top_k=5):
     # Generate total 10(num_nvp) * query_amount architectures
     _, _, _, found_arch_list = ensemble_eval_query_best(trainer.model, dataset_name, trainer.x_dim, trainer.z_dim,
-                                                        query_amount=200//trainer.model.num_nvp)
+                                                        query_amount=200 // trainer.model.num_nvp)
+    theta = get_theta(trainer.model, datasets['train_1'])
+    logger.info(f'Theta: {theta.numpy().tolist()}')
 
     num_new_found = 0
     if dataset_name == 'nb101':
@@ -327,11 +326,15 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
     # Predict accuracy by INN (performance predictor)
     x = tf.stack([tf.constant(i['x']) for i in found_arch_list_set])
     a = tf.stack([tf.constant(i['a']) for i in found_arch_list_set])
+    a = to_undiredted_adj(a)
     if tf.shape(x)[0] != 0:
         _, _, _, reg, _ = trainer.model((x, a), training=False)  # (batch, num_nvp, z_dim+y_dim)
-        reg = tf.reduce_mean(reg, axis=1)
+        reg = reg[:, :, -1]  # (batch, num_nvp)
+        theta_expanded = tf.expand_dims(theta, axis=0)  # (1, num_nvp)
+        reg = reg * tf.tile(theta_expanded, (tf.shape(reg)[0], 1))
+        reg = tf.reduce_sum(reg, axis=-1)
         for i in range(len(found_arch_list_set)):
-            found_arch_list_set[i]['y'] = reg[i][-1].numpy()
+            found_arch_list_set[i]['y'] = reg[i]
 
     # Select top-k to evaluate true label and add to training dataset
     top_acc_list = []
@@ -385,15 +388,17 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
     callbacks = [CSVLogger(os.path.join(logdir, f"learning_curve_phase2_retrain.csv")),
                  #tf.keras.callbacks.ReduceLROnPlateau(monitor='val_total_loss', factor=0.1, patience=15, verbose=1,
                  #                                     min_lr=1e-6),
-                 EarlyStopping(monitor='val_total_loss', patience=15, restore_best_weights=True)]
+                 #EarlyStopping(monitor='val_total_loss', patience=15, restore_best_weights=True)
+                 ]
 
     #tf.keras.backend.set_value(trainer.optimizer.learning_rate, 1e-3)
     trainer.fit(loader['train'].load(),
-                validation_data=loader['valid'].load(),
+                #validation_data=loader['valid'].load(),
                 epochs=train_epochs,
                 callbacks=callbacks,
                 steps_per_epoch=loader['train'].steps_per_epoch,
-                validation_steps=loader['valid'].steps_per_epoch)
+                #validation_steps=loader['valid'].steps_per_epoch
+                )
 
     results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
     logger.info(str(dict(zip(trainer.metrics_names, results))))
@@ -401,37 +406,39 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
     return top_acc_list, found_arch_list_set, num_new_found
 
 
-def get_theta(model, datasets, num_nvp, beta=1. ):
-    n = len(datasets)
+def get_theta(model, dataset, beta=1.):
+    num_nvp = len(model.nvp_list)
+    n = len(dataset)
     theta = 0
 
-    regs = []
-    for m in range(n):
-        data = datasets[m]
-        x, a, y = data.x, data.a, data.y
-        _, _, _, reg, _ = model((tf.constant([x]), tf.constant([a])), training=False)
-        # reg: (1, num_nvp, z_dim+y_dim)
-        regs.append(reg)
+    x = tf.stack([tf.constant(i.x, dtype=tf.float32) for i in dataset])
+    a = tf.stack([tf.constant(i.a, dtype=tf.float32) for i in dataset])
+    a = to_undiredted_adj(a)
+    _, _, _, regs, _ = model((x, a), training=False)
+    # regs: (n, num_nvp, z_dim+y_dim)
 
+    loss_cache = np.zeros((n, num_nvp)).astype(np.float32)
+    loss_cache2 = []
     for i in range(n):
         under_q = 0
         for k in range(num_nvp):
-            loss = 0
+            loss = 0.
             for m in range(i+1):
-                data = datasets[m]
-                x, a, y = data.x, data.a, data.y
-                loss += tf.keras.losses.mean_squared_error(y, regs[m][0][k][-1])
+                if m == i:
+                    loss_cache[m][k] = tf.keras.losses.mean_squared_error(dataset[m].y, regs[m][k][-1])
+                loss += loss_cache[m][k]
 
-            under_q += tf.exp(-(beta**-1) * loss)
+            under_q += tf.cast(tf.exp(-(beta**-1) * loss), tf.float32)
 
         upper_q = 0
         for m in range(i+1):
-            data = datasets[m]
-            x, a, y = data.x, data.a, data.y
-            y = tf.expand_dims(y, axis=0)
-            y = tf.expand_dims(y, axis=0)
-            y = tf.repeat(y, num_nvp, axis=1)
-            upper_q += tf.keras.losses.mean_squared_error(y, regs[m][:, :, -1:])
+            if m == i:
+                y = dataset[m].y
+                y = tf.expand_dims(y, axis=0)
+                y = tf.expand_dims(y, axis=0)
+                y = tf.repeat(y, num_nvp, axis=1)
+                loss_cache2.append(tf.keras.losses.mean_squared_error(y, regs[m][:, -1:]))
+            upper_q += loss_cache2[m]
 
         upper_q = tf.exp(-(beta**-1) * upper_q)
         theta += (upper_q / under_q) / n
@@ -478,8 +485,6 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     #pretrained_weight = 'logs/cifar10_ensemble/modelGAE_weights_phase2'
     pretrained_weight = 'logs/phase1_model_cifar100/modelGAE_weights_phase1'
 
-    retrain_epochs = 20
-
     eps_scale = 0.05  # 0.1
     d_model = 32
     dropout_rate = 0.0
@@ -490,7 +495,8 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     retrain_finetune = False
     latent_dim = 16
 
-    train_epochs = 1000
+    train_epochs = 200
+    retrain_epochs = 20
     patience = 100
 
     # 15624
@@ -553,26 +559,33 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
 
     global_top_acc_list = []
     global_top_arch_list = []
+    history_top = 0
+    patience = 20
+    patience_cot = 0
+    find_optimal_query = 0
+    find_optimal = False
+
     if train_phase[1]:
         batch_size = 64
         repeat_label = 20
-        now_queried = train_sample_amount + valid_sample_amount
+        now_queried = train_sample_amount
         logger.info('Train phase 2')
         datasets['train_1'] = mask_graph_dataset(datasets['train'], train_sample_amount, 1, random_seed=random_seed)
-        datasets['valid_1'] = mask_graph_dataset(datasets['valid'], valid_sample_amount, 1, random_seed=random_seed)
+        #datasets['valid_1'] = mask_graph_dataset(datasets['valid'], valid_sample_amount, 1, random_seed=random_seed)
         datasets['train_1'].filter(lambda g: not np.isnan(g.y))
-        datasets['valid_1'].filter(lambda g: not np.isnan(g.y))
+        #datasets['valid_1'].filter(lambda g: not np.isnan(g.y))
         datasets['train'] = mask_graph_dataset(datasets['train'], train_sample_amount, repeat_label, random_seed=random_seed)
-        datasets['valid'] = mask_graph_dataset(datasets['valid'], valid_sample_amount, repeat_label, random_seed=random_seed)
+        #datasets['valid'] = mask_graph_dataset(datasets['valid'], valid_sample_amount, repeat_label, random_seed=random_seed)
         datasets['train'].filter(lambda g: not np.isnan(g.y))
-        datasets['valid'].filter(lambda g: not np.isnan(g.y))
+        #datasets['valid'].filter(lambda g: not np.isnan(g.y))
 
         loader = to_loader(datasets, batch_size, train_epochs)
         callbacks = [CSVLogger(os.path.join(logdir, f"learning_curve_phase2.csv")),
                      #tensorboard_callback,
-                     tf.keras.callbacks.ReduceLROnPlateau(monitor='val_total_loss', factor=0.1, patience=50, verbose=1,
-                                                          min_lr=1e-5),
-                     EarlyStopping(monitor='val_total_loss', patience=patience, restore_best_weights=True)]
+                     #tf.keras.callbacks.ReduceLROnPlateau(monitor='val_total_loss', factor=0.1, patience=50, verbose=1,
+                     #                                     min_lr=1e-5),
+                     #EarlyStopping(monitor='val_total_loss', patience=patience, restore_best_weights=True)
+                     ]
         trainer = train(2, model, loader, train_epochs, logdir, callbacks,
                         x_dim=x_dim, y_dim=y_dim, z_dim=z_dim, finetune=finetune, learning_rate=1e-3)
         results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
@@ -586,7 +599,8 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         # Reset the lr for retrain
         top_list = []
         run = 0
-        while now_queried < query_budget and run <= 100:
+
+        while now_queried < query_budget and run <= 200:
             logger.info('')
             logger.info(f'Retrain run {run}')
             top_acc_list, top_arch_list, num_new_found = retrain(trainer, datasets, dataset_name, batch_size,
@@ -599,13 +613,28 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
             global_top_arch_list += top_arch_list
             run += 1
 
-        theta = get_theta(model, datasets['train_1'], num_nvp, beta=1.).numpy().tolist()
-        logger.info(f'Theta: {theta}')
+            if len(top_acc_list) != 0 and max(top_acc_list) > history_top:
+                history_top = max(top_acc_list)
+                patience_cot = 0
+            else:
+                patience_cot += 1
+
+            #if patience_cot >= patience:
+            #    break
+
+            if not find_optimal and max(global_top_acc_list) > 0.9160:
+                find_optimal_query = now_queried
+                find_optimal = True
+                break
+
+        #theta = get_theta(model, datasets['train_1'], num_nvp, beta=1.).numpy().tolist()
+        #logger.info(f'Theta: {theta}')
     else:
         model.load_weights(pretrained_weight)
 
     #invalid, avg_acc, best_acc, found_arch_list = eval_query_best(model, x_dim, z_dim, query_amount=10)
     logger.info('Final result')
+    logger.info(f'Find optimal query amount {find_optimal_query}')
     logger.info(f'Avg found acc {sum(global_top_acc_list) / len(global_top_acc_list)}')
     logger.info(f'Best found acc {max(global_top_acc_list)}')
     top_test_acc_list = []
