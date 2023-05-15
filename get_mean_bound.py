@@ -9,13 +9,14 @@ from models.TransformerAE import TransformerAutoencoderNVP
 import tensorflow as tf
 import os
 from datasets.nb201_dataset import NasBench201Dataset
-from datasets.utils import train_valid_test_split_dataset, mask_graph_dataset, arch_list_to_set
+from datasets.utils import train_valid_test_split_dataset, mask_graph_dataset, arch_list_to_set, \
+    repeat_graph_dataset_element
 from evalGAE import query_acc_by_ops, ensemble_eval_query_best
 from trainGAE_two_phase import to_loader, mask_for_model, mask_for_spec
 from utils.py_utils import get_logdir_and_logger
 from spektral.data import Graph
 from utils.tf_utils import to_undiredted_adj
-from cal_upper_bound import after_theta_mse
+from cal_upper_bound import get_bound
 
 
 def parse_args():
@@ -326,7 +327,6 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
     # Generate total 10(num_nvp) * query_amount architectures
     _, _, _, found_arch_list = ensemble_eval_query_best(trainer.model, dataset_name, trainer.x_dim, trainer.z_dim,
                                                         query_amount=200 // trainer.model.num_nvp)
-
     theta = get_theta(trainer.model, datasets['train_1'])
     logger.info(f'Theta: {theta.numpy().tolist()}')
 
@@ -483,178 +483,136 @@ def prepare_model(num_nvp, nvp_config, latent_dim, num_layers, d_model, num_head
 
 
 def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_budget):
-    logdir, logger = get_logdir_and_logger(dataset_name, f'trainGAE_ensemble_{seed}.log')
-    random_seed = seed
-    tf.random.set_seed(random_seed)
-    random.seed(random_seed)
+    bound_list = []
+    logdir, logger = get_logdir_and_logger(dataset_name, f'get_mean_bound.log')
+    for xxxx in range(100):
+        random_seed = xxxx
+        tf.random.set_seed(random_seed)
+        random.seed(random_seed)
 
-    top_k = 5
-    num_ops = 7
-    num_nodes = 8
-    num_adjs = 64
-    is_only_validation_data = True
-    label_epochs = 200
+        top_k = 5
+        num_ops = 7
+        num_nodes = 8
+        num_adjs = 64
+        is_only_validation_data = True
+        label_epochs = 200
 
-    train_phase = [0, 1]  # 0 not train, 1 train
-    #pretrained_weight = 'logs/cifar10_ensemble/modelGAE_weights_phase2'
-    pretrained_weight = 'logs/phase1_model_cifar100/modelGAE_weights_phase1'
+        train_phase = [0, 1]  # 0 not train, 1 train
+        pretrained_weight = 'logs/phase1_model_cifar100/modelGAE_weights_phase1'
 
-    eps_scale = 0.05  # 0.1
-    d_model = 32
-    dropout_rate = 0.0
-    dff = 256
-    num_layers = 3
-    num_heads = 3
-    finetune = False
-    retrain_finetune = False
-    latent_dim = 16
+        eps_scale = 0.05  # 0.1
+        d_model = 32
+        dropout_rate = 0.0
+        dff = 256
+        num_layers = 3
+        num_heads = 3
+        finetune = False
+        retrain_finetune = False
+        latent_dim = 16
 
-    train_epochs = 500
-    retrain_epochs = 50
-    patience = 50
+        train_epochs = 1000
+        patience = 100
 
-    # 15624
-    datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, dataset=dataset_name,
-                                                                 hp=str(label_epochs), seed=False),
-                                              ratio=[0.8, 0.1, 0.1],
-                                              shuffle=True,
-                                              shuffle_seed=0)
+        # 15624
+        datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, dataset=dataset_name,
+                                                                     hp=str(label_epochs), seed=False),
+                                                  ratio=[0.8, 0.1, 0.1],
+                                                  shuffle=True,
+                                                  shuffle_seed=0)
 
-    for key in datasets:
-        if is_only_validation_data:
-            datasets[key].apply(OnlyValidAccTransform())
-            datasets[key].apply(OnlyFinalAcc())
-            datasets[key].apply(LabelScale(scale=0.01))
-        else:
-            datasets[key].apply(ReshapeYTransform())
-
-    x_dim = latent_dim * num_nodes
-    y_dim = 1  # 1
-    z_dim = x_dim - 1  # 27
-    #z_dim = latent_dim * 4 - 1
-    tot_dim = y_dim + z_dim  # 28
-    #pad_dim = tot_dim - x_dim  # 14
-
-    num_nvp = 10
-    nvp_config = {
-        'n_couple_layer': 2,
-        'n_hid_layer': 4,
-        'n_hid_dim': 64,
-        'name': 'NVP',
-        'inp_dim': tot_dim
-    }
-
-    pretrained_model, model, retrain_model = prepare_model(num_nvp, nvp_config, latent_dim, num_layers, d_model, num_heads, dff,
-                                                           num_ops, num_nodes, num_adjs, dropout_rate, eps_scale)
-    model.summary(print_fn=logger.info)
-
-    tensorboard_callback = tf.keras.callbacks.TensorBoard(logdir, histogram_freq=1)
-
-    if train_phase[0]:
-        logger.info('Train phase 1')
-        batch_size = 256
-        loader = to_loader(datasets, batch_size, train_epochs)
-        callbacks = [CSVLogger(os.path.join(logdir, "learning_curve_phase1.csv")),
-                     tf.keras.callbacks.ReduceLROnPlateau(monitor='val_rec_loss', factor=0.1, patience=50, verbose=1,
-                                                          min_lr=1e-5),
-                     tensorboard_callback,
-                     EarlyStopping(monitor='val_rec_loss', patience=patience, restore_best_weights=True)]
-        trainer = train(1, pretrained_model, loader, train_epochs, logdir, callbacks)
-        results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
-        logger.info(f'{dict(zip(trainer.metrics_names, results))}')
-    else:
-        pretrained_model.load_weights(pretrained_weight)
-        #model.load_weights(pretrained_weight)
-
-    # Load AE weights from pretrained model
-    model.encoder.set_weights(pretrained_model.encoder.get_weights())
-    #model.nvp.set_weights(pretrained_model.nvp.get_weights())
-    model.decoder.set_weights(pretrained_model.decoder.get_weights())
-
-    global_top_acc_list = []
-    global_top_arch_list = []
-    history_top = 0
-    patience_cot = 0
-    find_optimal_query = 0
-    find_optimal = False
-
-    if train_phase[1]:
-        batch_size = 64
-        repeat_label = 20
-        now_queried = train_sample_amount + valid_sample_amount
-        logger.info('Train phase 2')
-        datasets['train_1'] = mask_graph_dataset(datasets['train'], train_sample_amount, 1, random_seed=random_seed)
-        datasets['valid_1'] = mask_graph_dataset(datasets['valid'], valid_sample_amount, 1, random_seed=random_seed)
-        datasets['train_1'].filter(lambda g: not np.isnan(g.y))
-        datasets['valid_1'].filter(lambda g: not np.isnan(g.y))
-        datasets['train'] = mask_graph_dataset(datasets['train'], train_sample_amount, repeat_label, random_seed=random_seed)
-        datasets['valid'] = mask_graph_dataset(datasets['valid'], valid_sample_amount, repeat_label, random_seed=random_seed)
-        datasets['train'].filter(lambda g: not np.isnan(g.y))
-        datasets['valid'].filter(lambda g: not np.isnan(g.y))
-
-        loader = to_loader(datasets, batch_size, train_epochs)
-        callbacks = [CSVLogger(os.path.join(logdir, f"learning_curve_phase2.csv")),
-                     #tensorboard_callback,
-                     tf.keras.callbacks.ReduceLROnPlateau(monitor='val_total_loss', factor=0.1, patience=patience // 2, verbose=1,
-                                                          min_lr=1e-5),
-                     EarlyStopping(monitor='val_total_loss', patience=patience, restore_best_weights=True)
-                     ]
-        trainer = train(2, model, loader, train_epochs, logdir, callbacks,
-                        x_dim=x_dim, y_dim=y_dim, z_dim=z_dim, finetune=finetune, learning_rate=1e-3, no_valid=False)
-        results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
-        logger.info(str(dict(zip(trainer.metrics_names, results))))
-
-        # Recreate Trainer for retrain
-        retrain_model.set_weights(model.get_weights())
-        trainer = Trainer2(retrain_model, x_dim, y_dim, z_dim, finetune=retrain_finetune, is_rank_weight=False)
-        trainer.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3), run_eagerly=False)
-
-        # Reset the lr for retrain
-        top_list = []
-        run = 0
-
-        while now_queried < query_budget and run <= 200:
-            logger.info('')
-            logger.info(f'Retrain run {run}')
-            top_acc_list, top_arch_list, num_new_found = retrain(trainer, datasets, dataset_name, batch_size,
-                                                                 retrain_epochs, logdir, top_list, logger,
-                                                                 repeat_label, top_k)
-            now_queried += num_new_found
-            if now_queried > query_budget:
-                break
-            global_top_acc_list += top_acc_list
-            global_top_arch_list += top_arch_list
-            run += 1
-
-            if len(top_acc_list) != 0 and max(top_acc_list) > history_top:
-                history_top = max(top_acc_list)
-                patience_cot = 0
+        for key in datasets:
+            if is_only_validation_data:
+                datasets[key].apply(OnlyValidAccTransform())
+                datasets[key].apply(OnlyFinalAcc())
+                datasets[key].apply(LabelScale(scale=0.01))
             else:
-                patience_cot += 1
+                datasets[key].apply(ReshapeYTransform())
 
-            #if patience_cot >= patience:
-            #    break
+        x_dim = latent_dim * num_nodes
+        y_dim = 1  # 1
+        z_dim = x_dim - 1  # 27
+        #z_dim = latent_dim * 4 - 1
+        tot_dim = y_dim + z_dim  # 28
+        #pad_dim = tot_dim - x_dim  # 14
 
-            if not find_optimal and max(global_top_acc_list) > 0.9160:
-                find_optimal_query = now_queried
-                find_optimal = True
-                break
+        num_nvp = 10
+        nvp_config = {
+            'n_couple_layer': 2,
+            'n_hid_layer': 4,
+            'n_hid_dim': 64,
+            'name': 'NVP',
+            'inp_dim': tot_dim
+        }
 
-    else:
-        model.load_weights(pretrained_weight)
+        pretrained_model, model, retrain_model = prepare_model(num_nvp, nvp_config, latent_dim, num_layers, d_model, num_heads, dff,
+                                                               num_ops, num_nodes, num_adjs, dropout_rate, eps_scale)
+        model.summary(print_fn=logger.info)
 
-    logger.info('Final result')
-    logger.info(f'Find optimal query amount {find_optimal_query}')
-    logger.info(f'Avg found acc {sum(global_top_acc_list) / len(global_top_acc_list)}')
-    logger.info(f'Best found acc {max(global_top_acc_list)}')
-    top_test_acc_list = []
-    for i in global_top_arch_list:
-        acc = query_acc_by_ops(i['x'], dataset_name, is_random=False, on='test-accuracy')
-        top_test_acc_list.append(acc)
-    logger.info(f'Avg test acc {sum(top_test_acc_list) / len(top_test_acc_list)}')
-    logger.info(f'Best test acc {max(top_test_acc_list)}')
+        if train_phase[0]:
+            logger.info('Train phase 1')
+            batch_size = 256
+            loader = to_loader(datasets, batch_size, train_epochs)
+            callbacks = [CSVLogger(os.path.join(logdir, "learning_curve_phase1.csv")),
+                         tf.keras.callbacks.ReduceLROnPlateau(monitor='val_rec_loss', factor=0.1, patience=50, verbose=1,
+                                                              min_lr=1e-5),
+                         EarlyStopping(monitor='val_rec_loss', patience=patience, restore_best_weights=True)]
+            trainer = train(1, pretrained_model, loader, train_epochs, logdir, callbacks)
+            results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
+            logger.info(f'{dict(zip(trainer.metrics_names, results))}')
+        else:
+            pretrained_model.load_weights(pretrained_weight)
+            #model.load_weights(pretrained_weight)
 
-    return sum(global_top_acc_list) / len(global_top_acc_list), max(global_top_acc_list), sum(top_test_acc_list) / len(top_test_acc_list), max(top_test_acc_list)
+        # Load AE weights from pretrained model
+        model.encoder.set_weights(pretrained_model.encoder.get_weights())
+        model.decoder.set_weights(pretrained_model.decoder.get_weights())
+
+        global_top_acc_list = []
+        global_top_arch_list = []
+
+        if train_phase[1]:
+            batch_size = 64
+            repeat_label = 20
+            logger.info('Train phase 2')
+            datasets['train_1'] = mask_graph_dataset(datasets['train'], train_sample_amount, 1, random_seed=random_seed)
+            datasets['valid_1'] = mask_graph_dataset(datasets['valid'], valid_sample_amount, 1, random_seed=random_seed)
+            datasets['train_1'].filter(lambda g: not np.isnan(g.y))
+            datasets['valid_1'].filter(lambda g: not np.isnan(g.y))
+
+            datasets['train_1'].graphs = datasets['train_1'].graphs[20:]
+            print(datasets['train_1'])
+            datasets['train'] = repeat_graph_dataset_element(datasets['train_1'], repeat_label)
+            datasets['valid'] = mask_graph_dataset(datasets['valid'], valid_sample_amount, repeat_label,
+                                                   random_seed=random_seed)
+
+            if not finetune:
+                datasets['train'].filter(lambda g: not np.isnan(g.y))
+                datasets['valid'].filter(lambda g: not np.isnan(g.y))
+
+            loader = to_loader(datasets, batch_size, train_epochs)
+            callbacks = [CSVLogger(os.path.join(logdir, f"learning_curve_phase2.csv")),
+                         tf.keras.callbacks.ReduceLROnPlateau(monitor='val_total_loss', factor=0.1, patience=10, verbose=1,
+                                                              min_lr=1e-5),
+                         EarlyStopping(monitor='val_total_loss', patience=patience, restore_best_weights=True)
+                         ]
+            trainer = train(2, model, loader, train_epochs, logdir, callbacks,
+                            x_dim=x_dim, y_dim=y_dim, z_dim=z_dim, finetune=finetune, learning_rate=1e-3, no_valid=False)
+            results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
+            logger.info(str(dict(zip(trainer.metrics_names, results))))
+
+            bound = get_bound(datasets['train_1'], model) ** 2
+            bound_list.append(bound)
+            logger.info(f'bound^2 {bound}')
+            logger.info(f'bound_list {bound_list}')
+
+        else:
+            model.load_weights(pretrained_weight)
+
+    print('bound_list', bound_list)
+    print('mean bound', np.mean(bound_list))
+    print('std bound', np.std(bound_list))
+    with open(os.path.join(logdir, 'bound_list.txt'), 'w') as f:
+        f.write(str(bound_list))
 
 
 if __name__ == '__main__':

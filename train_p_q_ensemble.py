@@ -1,4 +1,5 @@
 import argparse
+import pickle
 import random
 import numpy as np
 from tensorflow.python.keras.callbacks import CSVLogger, EarlyStopping
@@ -9,7 +10,8 @@ from models.TransformerAE import TransformerAutoencoderNVP
 import tensorflow as tf
 import os
 from datasets.nb201_dataset import NasBench201Dataset
-from datasets.utils import train_valid_test_split_dataset, mask_graph_dataset, arch_list_to_set
+from datasets.utils import train_valid_test_split_dataset, mask_graph_dataset, arch_list_to_set, \
+    repeat_graph_dataset_element
 from evalGAE import query_acc_by_ops, ensemble_eval_query_best
 from trainGAE_two_phase import to_loader, mask_for_model, mask_for_spec
 from utils.py_utils import get_logdir_and_logger
@@ -326,7 +328,6 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
     # Generate total 10(num_nvp) * query_amount architectures
     _, _, _, found_arch_list = ensemble_eval_query_best(trainer.model, dataset_name, trainer.x_dim, trainer.z_dim,
                                                         query_amount=200 // trainer.model.num_nvp)
-
     theta = get_theta(trainer.model, datasets['train_1'])
     logger.info(f'Theta: {theta.numpy().tolist()}')
 
@@ -496,7 +497,6 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     label_epochs = 200
 
     train_phase = [0, 1]  # 0 not train, 1 train
-    #pretrained_weight = 'logs/cifar10_ensemble/modelGAE_weights_phase2'
     pretrained_weight = 'logs/phase1_model_cifar100/modelGAE_weights_phase1'
 
     eps_scale = 0.05  # 0.1
@@ -509,9 +509,8 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     retrain_finetune = False
     latent_dim = 16
 
-    train_epochs = 500
-    retrain_epochs = 50
-    patience = 50
+    train_epochs = 1000
+    patience = 100
 
     # 15624
     datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, dataset=dataset_name,
@@ -548,8 +547,6 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
                                                            num_ops, num_nodes, num_adjs, dropout_rate, eps_scale)
     model.summary(print_fn=logger.info)
 
-    tensorboard_callback = tf.keras.callbacks.TensorBoard(logdir, histogram_freq=1)
-
     if train_phase[0]:
         logger.info('Train phase 1')
         batch_size = 256
@@ -557,7 +554,6 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         callbacks = [CSVLogger(os.path.join(logdir, "learning_curve_phase1.csv")),
                      tf.keras.callbacks.ReduceLROnPlateau(monitor='val_rec_loss', factor=0.1, patience=50, verbose=1,
                                                           min_lr=1e-5),
-                     tensorboard_callback,
                      EarlyStopping(monitor='val_rec_loss', patience=patience, restore_best_weights=True)]
         trainer = train(1, pretrained_model, loader, train_epochs, logdir, callbacks)
         results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
@@ -568,34 +564,33 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
 
     # Load AE weights from pretrained model
     model.encoder.set_weights(pretrained_model.encoder.get_weights())
-    #model.nvp.set_weights(pretrained_model.nvp.get_weights())
     model.decoder.set_weights(pretrained_model.decoder.get_weights())
 
     global_top_acc_list = []
     global_top_arch_list = []
-    history_top = 0
-    patience_cot = 0
-    find_optimal_query = 0
-    find_optimal = False
 
     if train_phase[1]:
         batch_size = 64
         repeat_label = 20
-        now_queried = train_sample_amount + valid_sample_amount
         logger.info('Train phase 2')
         datasets['train_1'] = mask_graph_dataset(datasets['train'], train_sample_amount, 1, random_seed=random_seed)
         datasets['valid_1'] = mask_graph_dataset(datasets['valid'], valid_sample_amount, 1, random_seed=random_seed)
         datasets['train_1'].filter(lambda g: not np.isnan(g.y))
         datasets['valid_1'].filter(lambda g: not np.isnan(g.y))
-        datasets['train'] = mask_graph_dataset(datasets['train'], train_sample_amount, repeat_label, random_seed=random_seed)
-        datasets['valid'] = mask_graph_dataset(datasets['valid'], valid_sample_amount, repeat_label, random_seed=random_seed)
-        datasets['train'].filter(lambda g: not np.isnan(g.y))
-        datasets['valid'].filter(lambda g: not np.isnan(g.y))
+
+        datasets['train_1'].graphs = datasets['train_1'].graphs[20:]
+        print(datasets['train_1'])
+        datasets['train'] = repeat_graph_dataset_element(datasets['train_1'], repeat_label)
+        datasets['valid'] = mask_graph_dataset(datasets['valid'], valid_sample_amount, repeat_label,
+                                               random_seed=random_seed)
+
+        if not finetune:
+            datasets['train'].filter(lambda g: not np.isnan(g.y))
+            datasets['valid'].filter(lambda g: not np.isnan(g.y))
 
         loader = to_loader(datasets, batch_size, train_epochs)
         callbacks = [CSVLogger(os.path.join(logdir, f"learning_curve_phase2.csv")),
-                     #tensorboard_callback,
-                     tf.keras.callbacks.ReduceLROnPlateau(monitor='val_total_loss', factor=0.1, patience=patience // 2, verbose=1,
+                     tf.keras.callbacks.ReduceLROnPlateau(monitor='val_total_loss', factor=0.1, patience=10, verbose=1,
                                                           min_lr=1e-5),
                      EarlyStopping(monitor='val_total_loss', patience=patience, restore_best_weights=True)
                      ]
@@ -604,57 +599,12 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
         logger.info(str(dict(zip(trainer.metrics_names, results))))
 
-        # Recreate Trainer for retrain
-        retrain_model.set_weights(model.get_weights())
-        trainer = Trainer2(retrain_model, x_dim, y_dim, z_dim, finetune=retrain_finetune, is_rank_weight=False)
-        trainer.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3), run_eagerly=False)
-
-        # Reset the lr for retrain
-        top_list = []
-        run = 0
-
-        while now_queried < query_budget and run <= 200:
-            logger.info('')
-            logger.info(f'Retrain run {run}')
-            top_acc_list, top_arch_list, num_new_found = retrain(trainer, datasets, dataset_name, batch_size,
-                                                                 retrain_epochs, logdir, top_list, logger,
-                                                                 repeat_label, top_k)
-            now_queried += num_new_found
-            if now_queried > query_budget:
-                break
-            global_top_acc_list += top_acc_list
-            global_top_arch_list += top_arch_list
-            run += 1
-
-            if len(top_acc_list) != 0 and max(top_acc_list) > history_top:
-                history_top = max(top_acc_list)
-                patience_cot = 0
-            else:
-                patience_cot += 1
-
-            #if patience_cot >= patience:
-            #    break
-
-            if not find_optimal and max(global_top_acc_list) > 0.9160:
-                find_optimal_query = now_queried
-                find_optimal = True
-                break
-
+        with open(os.path.join(logdir, 'datasets.pkl'), 'wb') as f:
+            pickle.dump(datasets, f)
+        with open(os.path.join(logdir, 'model.pkl'), 'wb') as f:
+            pickle.dump(model, f)
     else:
         model.load_weights(pretrained_weight)
-
-    logger.info('Final result')
-    logger.info(f'Find optimal query amount {find_optimal_query}')
-    logger.info(f'Avg found acc {sum(global_top_acc_list) / len(global_top_acc_list)}')
-    logger.info(f'Best found acc {max(global_top_acc_list)}')
-    top_test_acc_list = []
-    for i in global_top_arch_list:
-        acc = query_acc_by_ops(i['x'], dataset_name, is_random=False, on='test-accuracy')
-        top_test_acc_list.append(acc)
-    logger.info(f'Avg test acc {sum(top_test_acc_list) / len(top_test_acc_list)}')
-    logger.info(f'Best test acc {max(top_test_acc_list)}')
-
-    return sum(global_top_acc_list) / len(global_top_acc_list), max(global_top_acc_list), sum(top_test_acc_list) / len(top_test_acc_list), max(top_test_acc_list)
 
 
 if __name__ == '__main__':

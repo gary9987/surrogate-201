@@ -92,7 +92,7 @@ def main():
     random.seed(random_seed)
 
 
-    model_file_p = 'logs/cifar10-valid/test20/model.pkl'
+    model_file_p = 'logs/cifar10-valid/testp/model.pkl'
     model_file_q = 'logs/cifar10-valid/test50/model.pkl'
     datasets_file = 'logs/cifar10-valid/test50/datasets.pkl'
 
@@ -108,28 +108,29 @@ def main():
     print('dataset', datasets['train_1'])
 
     tf.config.run_functions_eagerly(False)
+    mcmc_sample = False
+    if mcmc_sample:
+        # Initialize empty lists to store the posterior standard deviations
+        posterior_std_weights, posterior_mean_weights = get_mcmc_std_mean(p_model, datasets['train_1'][:20], n_samples=1000, noise=0.1)
+        print("Posterior standard deviation (weights):", posterior_std_weights)
+        print("Posterior mean (weights):", posterior_mean_weights)
 
-    # Initialize empty lists to store the posterior standard deviations
-    posterior_std_weights, posterior_mean_weights = get_mcmc_std_mean(p_model, datasets['train_1'][:20], n_samples=1000, noise=0.1)
-    print("Posterior standard deviation (weights):", posterior_std_weights)
-    print("Posterior mean (weights):", posterior_mean_weights)
+        with open('logs/cifar10-valid/test50/p_mean.pkl', 'wb') as f:
+            pickle.dump(posterior_mean_weights, f)
+        with open('logs/cifar10-valid/test50/p_std.pkl', 'wb') as f:
+            pickle.dump(posterior_std_weights, f)
 
-    with open('logs/cifar10-valid/test50/p_mean.pkl', 'wb') as f:
-        pickle.dump(posterior_mean_weights, f)
-    with open('logs/cifar10-valid/test50/p_std.pkl', 'wb') as f:
-        pickle.dump(posterior_std_weights, f)
+        # Initialize empty lists to store the posterior standard deviations
+        posterior_std_weights, posterior_mean_weights = get_mcmc_std_mean(q_model, datasets['train_1'], n_samples=1000, noise=0.1)
+        print("Posterior standard deviation (weights):", posterior_std_weights)
+        print("Posterior mean (weights):", posterior_mean_weights)
 
-    # Initialize empty lists to store the posterior standard deviations
-    posterior_std_weights, posterior_mean_weights = get_mcmc_std_mean(q_model, datasets['train_1'], n_samples=1000, noise=0.1)
-    print("Posterior standard deviation (weights):", posterior_std_weights)
-    print("Posterior mean (weights):", posterior_mean_weights)
+        with open('logs/cifar10-valid/test50/q_mean.pkl', 'wb') as f:
+            pickle.dump(posterior_mean_weights, f)
+        with open('logs/cifar10-valid/test50/q_std.pkl', 'wb') as f:
+            pickle.dump(posterior_std_weights, f)
 
-    with open('logs/cifar10-valid/test50/q_mean.pkl', 'wb') as f:
-        pickle.dump(posterior_mean_weights, f)
-    with open('logs/cifar10-valid/test50/q_std.pkl', 'wb') as f:
-        pickle.dump(posterior_std_weights, f)
 
-    
     with open('logs/cifar10-valid/test50/p_mean.pkl', 'rb') as f:
         p_mean = pickle.load(f)
     with open('logs/cifar10-valid/test50/p_std.pkl', 'rb') as f:
@@ -145,6 +146,18 @@ def main():
     ori_y = [float(graph.y[-1]) for graph in datasets['train_1']]
     print(mse(ori_y, pred_y))
     '''
+    sample_weights = []
+    for l, _ in enumerate(p_mean):
+        shape = p_mean[l].shape
+        matrix = np.random.normal(p_mean[l].flatten(), p_std[l].flatten(), p_mean[l].flatten().shape)
+        matrix = matrix.reshape(shape)
+        sample_weights.append(matrix)
+
+    sample_weights.extend(p_model.nvp.get_weights()[-2:])
+    p_model.nvp.set_weights(sample_weights)
+    pred_y = get_pred_list(p_model, datasets['train_1'])
+    ori_y = [float(graph.y[-1]) for graph in datasets['train_1']]
+    print(mse(ori_y, pred_y))
 
     p_mean_tmp = []
     for i in p_mean:
@@ -165,14 +178,37 @@ def main():
 
     q_var = np.square(q_std)
     p_var = np.square(p_std)
+
+    p_mean = p_mean.flatten().tolist()
+    p_std = p_std.flatten().tolist()
+    q_mean = q_mean.flatten().tolist()
+    q_std = q_std.flatten().tolist()
+    '''
+    kl_list = []
+    for mean1, std1, mean2, std2 in zip(p_mean, p_std, q_mean, q_std):
+        kl_divergence = np.log(std2 / std1) + (std1 ** 2 + (mean1 - mean2) ** 2) / (2 * std2 ** 2) - 0.5
+        kl_list.append(kl_divergence)
+
+    print('mean kl', np.mean(kl_list))
+    '''
+    mean1 = np.mean(p_mean)
+    std1 = np.std(p_mean)
+    mean2 = np.mean(q_mean)
+    std2 = np.std(q_mean)
+    print(mean1, std1, mean2, std2)
+    kl_divergence = np.log(std2 / std1) + (std1 ** 2 + (mean1 - mean2) ** 2) / (2 * std2 ** 2) - 0.5
+    print('kl', np.mean(kl_divergence))
+
+    '''
     q_minus_p = q_mean - p_mean
-    det_q_var = np.prod(q_var)
-    det_p_var = np.prod(p_var)
-    term1 = (1. / q_var) * p_var - 1
-    term1 =  np.sum(term1)
+    q_var_div_p_var = q_var / p_var
+    q_var_div_p_var = np.prod(q_var_div_p_var)
+    term1 = (1. / q_var) * p_var
+    term1 = np.sum(term1)
     term2 = float(np.dot(q_minus_p.T * (1. / q_var),  q_minus_p))
     term3 = p_mean.shape[0]
-    term4 = np.log(det_q_var / det_p_var)
+    #term4 = np.log(q_var_div_p_var)
+    term4 = 0
     kl_p_q = 0.5 * (term1 + term2 - term3 + term4)
     print('kl_p_q', kl_p_q)
 
@@ -202,6 +238,7 @@ def main():
     pred_y = get_pred_list(q_model, datasets['train_1'])
     ori_y = [float(graph.y[-1]) for graph in datasets['train_1']]
     print(mse(ori_y, pred_y))
+    '''
 
 
 if __name__ == '__main__':

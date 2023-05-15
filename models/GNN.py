@@ -5,6 +5,7 @@ from tensorflow.keras.layers import Dense
 from spektral.layers import GINConvBatch, GlobalSumPool, GlobalMaxPool, GlobalAvgPool, DiffPool
 import tensorflow as tf
 from invertible_neural_networks.flow import NVP
+from invertible_neural_networks.flow_BNN import NVP_BNN
 from models.TransformerAE import Decoder
 from models.base import PositionalEmbedding
 
@@ -154,6 +155,29 @@ class GraphAutoencoderNVP(GraphAutoencoder):
         return self.nvp.inverse(z)
 
 
+class GraphAutoencoderNVP_BNN(GraphAutoencoder):
+    def __init__(self, nvp_config, latent_dim, num_layers, d_model, num_heads, dff, num_ops, num_nodes, num_adjs,
+                 eps_scale=0.01, dropout_rate=0.0):
+        super(GraphAutoencoderNVP_BNN, self).__init__(latent_dim, num_layers, d_model, num_heads, dff, num_ops,
+                                                  num_nodes, num_adjs, eps_scale, dropout_rate)
+        if nvp_config['inp_dim'] is None:
+            nvp_config['inp_dim'] = latent_dim
+
+        self.pad_dim = nvp_config['inp_dim'] - latent_dim * num_nodes
+        from invertible_neural_networks.flow_BNN import NVP_BNN
+        self.nvp = NVP_BNN(**nvp_config)
+
+    def call(self, inputs):
+        ops_cls, adj_cls, kl_loss, latent_mean = super().call(inputs)
+        latent_mean = tf.reshape(latent_mean, (tf.shape(latent_mean)[0], -1))
+        latent_mean = tf.concat([latent_mean, tf.zeros((tf.shape(latent_mean)[0], self.pad_dim))], axis=-1)
+        reg = self.nvp(latent_mean)
+        return ops_cls, adj_cls, kl_loss, reg, latent_mean
+
+    def inverse(self, z):
+        return self.nvp.inverse(z)
+
+
 class GraphAutoencoderEnsembleNVP(GraphAutoencoder):
     def __init__(self, num_nvp, nvp_config, latent_dim, num_layers, d_model, num_heads, dff, num_ops, num_nodes, num_adjs,
                  eps_scale=0.01, dropout_rate=0.0):
@@ -165,6 +189,29 @@ class GraphAutoencoderEnsembleNVP(GraphAutoencoder):
         self.num_nvp = num_nvp
         self.pad_dim = nvp_config['inp_dim'] - latent_dim * num_nodes
         self.nvp_list = [NVP(**nvp_config) for _ in range(num_nvp)]
+
+    def call(self, inputs):
+        ops_cls, adj_cls, kl_loss, latent_mean = super().call(inputs)
+        latent_mean = tf.reshape(latent_mean, (tf.shape(latent_mean)[0], -1))
+        latent_mean = tf.concat([latent_mean, tf.zeros((tf.shape(latent_mean)[0], self.pad_dim))], axis=-1)
+        reg = tf.transpose(tf.stack([nvp(latent_mean) for nvp in self.nvp_list]), (1, 0, 2))
+        return ops_cls, adj_cls, kl_loss, reg, latent_mean
+
+    def inverse(self, z):
+        return tf.transpose(tf.stack([nvp.inverse(z) for nvp in self.nvp_list]), (1, 0, 2))
+
+
+class GraphAutoencoderEnsembleNVP_BNN(GraphAutoencoder):
+    def __init__(self, num_nvp, nvp_config, latent_dim, num_layers, d_model, num_heads, dff, num_ops, num_nodes, num_adjs,
+                 eps_scale=0.01, dropout_rate=0.0):
+        super(GraphAutoencoderEnsembleNVP_BNN, self).__init__(latent_dim, num_layers, d_model, num_heads, dff, num_ops,
+                                                  num_nodes, num_adjs, eps_scale, dropout_rate)
+        if nvp_config['inp_dim'] is None:
+            nvp_config['inp_dim'] = latent_dim
+
+        self.num_nvp = num_nvp
+        self.pad_dim = nvp_config['inp_dim'] - latent_dim * num_nodes
+        self.nvp_list = [NVP_BNN(**nvp_config) for _ in range(num_nvp)]
 
     def call(self, inputs):
         ops_cls, adj_cls, kl_loss, latent_mean = super().call(inputs)
