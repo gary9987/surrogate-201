@@ -4,7 +4,7 @@ import numpy as np
 from tensorflow.python.keras.callbacks import CSVLogger, EarlyStopping
 from datasets.transformation import ReshapeYTransform, OnlyValidAccTransform, OnlyFinalAcc, LabelScale
 from invertible_neural_networks.flow import MMD_multiscale
-from models.GNN import GraphAutoencoder, GraphAutoencoderEnsembleNVP, get_rank_weight
+from models.GNN import GraphAutoencoder, GraphAutoencoderEnsembleNVP_BNN, get_rank_weight
 from models.TransformerAE import TransformerAutoencoderNVP
 import tensorflow as tf
 import os
@@ -467,13 +467,13 @@ def prepare_model(num_nvp, nvp_config, latent_dim, num_layers, d_model, num_head
                                         num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=eps_scale)
     pretrained_model((tf.random.normal(shape=(1, num_nodes, num_ops)), tf.random.normal(shape=(1, num_nodes, num_nodes))))
 
-    model = GraphAutoencoderEnsembleNVP(num_nvp, nvp_config=nvp_config, latent_dim=latent_dim, num_layers=num_layers,
+    model = GraphAutoencoderEnsembleNVP_BNN(num_nvp, nvp_config=nvp_config, latent_dim=latent_dim, num_layers=num_layers,
                                 d_model=d_model, num_heads=num_heads,
                                 dff=dff, num_ops=num_ops, num_nodes=num_nodes,
                                 num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=eps_scale)
     model((tf.random.normal(shape=(1, num_nodes, num_ops)), tf.random.normal(shape=(1, num_nodes, num_nodes))))
 
-    retrain_model = GraphAutoencoderEnsembleNVP(num_nvp, nvp_config=nvp_config, latent_dim=latent_dim, num_layers=num_layers,
+    retrain_model = GraphAutoencoderEnsembleNVP_BNN(num_nvp, nvp_config=nvp_config, latent_dim=latent_dim, num_layers=num_layers,
                                         d_model=d_model, num_heads=num_heads,
                                         dff=dff, num_ops=num_ops, num_nodes=num_nodes,
                                         num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=eps_scale)
@@ -574,6 +574,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     global_top_acc_list = []
     global_top_arch_list = []
     history_top = 0
+    #patience = 20
     patience_cot = 0
     find_optimal_query = 0
     find_optimal = False
@@ -595,7 +596,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         loader = to_loader(datasets, batch_size, train_epochs)
         callbacks = [CSVLogger(os.path.join(logdir, f"learning_curve_phase2.csv")),
                      #tensorboard_callback,
-                     tf.keras.callbacks.ReduceLROnPlateau(monitor='val_total_loss', factor=0.1, patience=patience // 2, verbose=1,
+                     tf.keras.callbacks.ReduceLROnPlateau(monitor='val_total_loss', factor=0.1, patience=patience//2, verbose=1,
                                                           min_lr=1e-5),
                      EarlyStopping(monitor='val_total_loss', patience=patience, restore_best_weights=True)
                      ]
@@ -608,6 +609,8 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         retrain_model.set_weights(model.get_weights())
         trainer = Trainer2(retrain_model, x_dim, y_dim, z_dim, finetune=retrain_finetune, is_rank_weight=False)
         trainer.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3), run_eagerly=False)
+        #lr = tf.keras.optimizers.schedules.CosineDecay(1e-3, retrain_epochs * 200 * loader['train'].steps_per_epoch)
+        #trainer.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr), run_eagerly=False)
 
         # Reset the lr for retrain
         top_list = []
@@ -640,9 +643,12 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
                 find_optimal = True
                 break
 
+        #theta = get_theta(model, datasets['train_1'], num_nvp, beta=1.).numpy().tolist()
+        #logger.info(f'Theta: {theta}')
     else:
         model.load_weights(pretrained_weight)
 
+    #invalid, avg_acc, best_acc, found_arch_list = eval_query_best(model, x_dim, z_dim, query_amount=10)
     logger.info('Final result')
     logger.info(f'Find optimal query amount {find_optimal_query}')
     logger.info(f'Avg found acc {sum(global_top_acc_list) / len(global_top_acc_list)}')
