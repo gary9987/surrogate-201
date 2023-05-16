@@ -159,9 +159,9 @@ def repeat_graph_dataset_element(graph_dataset, num_repeat: int):
 
 def graph_to_str(graph):
     if isinstance(graph, dict):
-        return str(graph['x'].tolist()) + str(graph['a'].tolist())
+        return str(graph['x'].astype(np.float32).tolist()) + str(graph['a'].astype(np.float32).tolist())
     elif isinstance(graph, Graph):
-        return str(graph.x.tolist()) + str(graph.a.tolist())
+        return str(graph.x.astype(np.float32).tolist()) + str(graph.a.astype(np.float32).tolist())
     else:
         raise ValueError('graph type error')
 

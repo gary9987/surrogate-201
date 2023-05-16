@@ -331,15 +331,15 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
     found_arch_list.extend(found_arch_list2)
     if dataset_name == 'nb101':
         found_arch_list = list(map(mask_for_model, found_arch_list))
-        found_arch_list = filter(lambda arch: arch is not None and arch['x'] is not None, found_arch_list)
+        found_arch_list = list(filter(lambda arch: arch is not None and arch['x'] is not None, found_arch_list))
 
     found_arch_list_set = arch_list_to_set(found_arch_list)
 
     # Predict accuracy by INN (performance predictor)
     x = tf.stack([tf.constant(i['x']) for i in found_arch_list_set])
     a = tf.stack([tf.constant(i['a']) for i in found_arch_list_set])
-    a = to_undiredted_adj(a)
     if tf.shape(x)[0] != 0:
+        a = to_undiredted_adj(a)
         _, _, _, reg, _ = trainer.model((x, a), training=False)
         for i in range(len(found_arch_list_set)):
             found_arch_list_set[i]['y'] = reg[i][-1].numpy()
