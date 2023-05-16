@@ -21,10 +21,10 @@ from utils.tf_utils import to_undiredted_adj
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--train_sample_amount', type=int, default=50, help='Number of samples to train (default: 250)')
+    parser.add_argument('--train_sample_amount', type=int, default=50, help='Number of samples to train (default: 50)')
     parser.add_argument('--valid_sample_amount', type=int, default=50, help='Number of samples to train (default: 50)')
-    parser.add_argument('--query_budget', type=int, default=400)
-    parser.add_argument('--dataset', type=str, default='cifar10-valid')
+    parser.add_argument('--query_budget', type=int, default=192)
+    parser.add_argument('--dataset', type=str, default='cifar10-valid', help='Could be nb101, cifar10-valid, cifar100, ImageNet16-120')
     parser.add_argument('--seed', type=int, default=0)
     return parser.parse_args()
 
@@ -298,11 +298,17 @@ def train(phase: int, model, loader, train_epochs, logdir, callbacks=None, x_dim
 
 
 def to_loader(datasets, batch_size: int, epochs: int):
+    """
+    :param datasets:
+    :param batch_size:
+    :param epochs:
+    :return: return a dict of BatchLoader for 'train', 'valid', 'test'
+    """
     loader = {}
     for key, value in datasets.items():
-        if key != 'test':
+        if key == 'train' or key == 'valid':
             loader[key] = BatchLoader(value, batch_size=batch_size, shuffle=True, epochs=epochs * 2)
-        else:
+        elif key == 'test':
             loader[key] = BatchLoader(value, batch_size=batch_size, shuffle=False, epochs=1)
 
     return loader
@@ -449,7 +455,6 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     else:
         pretrained_weight = 'logs/phase1_model_cifar100/modelGAE_weights_phase1'
 
-    retrain_epochs = 20
     eps_scale = 0.05  # 0.1
     d_model = 32
     dropout_rate = 0.0
@@ -461,6 +466,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     latent_dim = 16
 
     train_epochs = 1000
+    retrain_epochs = 20
     patience = 100
 
     if dataset_name == 'nb101':
@@ -494,7 +500,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
 
     x_dim = latent_dim * num_nodes
     y_dim = 1  # 1
-    z_dim = x_dim - 1  # 27
+    z_dim = x_dim - 1  # 127
     # z_dim = latent_dim * 4 - 1
     tot_dim = y_dim + z_dim  # 28
     # pad_dim = tot_dim - x_dim  # 14
@@ -527,7 +533,6 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         logger.info(f'{dict(zip(trainer.metrics_names, results))}')
     else:
         pretrained_model.load_weights(pretrained_weight)
-        #model.load_weights(pretrained_weight)
 
     # Load AE weights from pretrained model
     model.encoder.set_weights(pretrained_model.encoder.get_weights())

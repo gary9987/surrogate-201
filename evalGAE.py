@@ -143,7 +143,7 @@ def ensemble_inverse_from_acc(model: tf.keras.Model, num_sample_z: int, x_dim: i
         raise NotImplementedError
         #rev_latent = rev_latent[:, :x_dim]
     elif version == 2:
-        rev_latent = tf.reshape(rev_latent, (batch_size * model.num_nvp, 8, -1))  # (batch_size, num_sample_z, latent_dim)
+        rev_latent = tf.reshape(rev_latent, (batch_size * model.num_nvp, model.num_nodes, -1))  # (batch_size, num_sample_z, latent_dim)
     else:
         raise ValueError('version')
 
@@ -151,22 +151,17 @@ def ensemble_inverse_from_acc(model: tf.keras.Model, num_sample_z: int, x_dim: i
     ops_cls = tf.reshape(ops_cls, (batch_size * model.num_nvp, num_sample_z, -1, model.num_ops))  # (batch_size, num_sample_z, 8, 7)
     ops_vote = tf.reduce_sum(ops_cls, axis=1).numpy()  # (batch_size, 1, 8 * 7)
 
-    adj = tf.reshape(adj, (batch_size * model.num_nvp, num_sample_z, 8, 8))  # (batch_size, num_sample_z, 8 * 8)
-    adj = tf.where(tf.reduce_mean(adj, axis=1) >= 0.5, x=1., y=0.).numpy()  # (batch_size, 8 * 8)
-    #adj = np.reshape(adj, (batch_size, int(adj.shape[-1] ** (1 / 2)), int(adj.shape[-1] ** (1 / 2))))
+    adj = tf.reshape(adj, (batch_size * model.num_nvp, num_sample_z, model.num_nodes, model.num_nodes))  # (batch_size, num_sample_z, 8, 8)
+    adj = tf.where(tf.reduce_mean(adj, axis=1) >= 0.5, x=1., y=0.).numpy()  # (batch_size, 8, 8)
 
-    ops_idx_list = []
-    adj_list = []
-    for i, j in zip(ops_vote, adj):
-        ops_idx_list.append(np.argmax(i, axis=-1).tolist())
-        adj_list.append(j)
+    ops_idx_list = [np.argmax(i, axis=-1).tolist() for i in ops_vote]
+    adj_list = [i for i in adj]
 
     return ops_idx_list, adj_list
 
 
 def ensemble_eval_query_best(model: tf.keras.Model, dataset_name, x_dim: int, z_dim: int, query_amount=10, noise_scale=0.0, version=2):
     # Eval query 1.0
-    x = []
     y = []
     found_arch_list = []
     invalid = 0
@@ -176,9 +171,22 @@ def ensemble_eval_query_best(model: tf.keras.Model, dataset_name, x_dim: int, z_
     ops_idx_lis, adj_list = ensemble_inverse_from_acc(model, num_sample_z=1, x_dim=x_dim, z_dim=z_dim, to_inv_acc=to_inv, version=version)
     for ops_idx, adj in zip(ops_idx_lis, adj_list):
         try:
-            acc = query_acc_by_ops(ops_idx, dataset_name, is_random=False)
+            if dataset_name != 'nb101':
+                acc = query_acc_by_ops(ops_idx, dataset_name, is_random=False)
+            else:
+                adj_for_spec, ops_idx_for_spec = mask_padding_vertex_for_spec(adj, ops_idx)
+                acc = nb101_dataset.get_metrics(adj_for_spec, ops_idx_for_spec)[1]  # [1] for valid acc
+
             y.append(acc)
-            found_arch_list.append({'x': np.eye(len(OPS_by_IDX_201))[ops_idx], 'a': adj, 'y': np.array([acc])})
+            if dataset_name == 'nb101':
+                adj, ops = mask_padding_vertex_for_model(adj, np.eye(model.num_ops)[ops_idx])
+            else:
+                ops = np.eye(model.num_ops)[ops_idx]
+
+            if adj is not None and ops is not None:
+                found_arch_list.append({'x': ops.astype(np.float32),
+                                        'a': adj.astype(np.float32),
+                                        'y': np.array([acc]).astype(np.float32)})
         except:
             print('invalid')
             invalid += 1

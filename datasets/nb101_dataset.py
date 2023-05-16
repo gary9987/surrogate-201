@@ -1,4 +1,5 @@
 # Partial code from: https://github.com/jovitalukasik/SVGe/blob/main/datasets/NASBench101.py
+import copy
 import logging
 from pathlib import Path
 import spektral.data
@@ -82,10 +83,10 @@ def transform_nb101_data_list_to_graph(records: dict):
 
 def mask_padding_vertex_for_model(a, x):
     """
-    virtual node is padded with 0
+    virtual node is padded with 0 for ops
     :param x: (nodes, num_ops)
     :param a: (nodes, nodes)
-    :return: x: (nodes, num_ops), a: (nodes, nodes)
+    :return: x: (nodes, num_ops), a: (nodes, nodes) if a and x are valid else None, None
     """
     try:
         ops = np.argmax(x, axis=-1).tolist()
@@ -99,9 +100,10 @@ def mask_padding_vertex_for_model(a, x):
 
 def mask_padding_vertex_for_spec(a, x):
     """
+    Return the ops and adj for nb101 ModelSpec
     :param x: (nodes, num_ops) or (nodes)
     :param a: (nodes, nodes)
-    :return: x: (output_idx+1, output_idx+1)
+    :return: a: (output_idx+1, output_idx+1), x: (output_idx+1)
     """
     if isinstance(x, list):
         ops = x
@@ -111,6 +113,18 @@ def mask_padding_vertex_for_spec(a, x):
     new_x = x[:output_idx+1]
     new_a = a[:output_idx+1, :output_idx+1]
     return new_a, new_x
+
+
+def pad_graph(graph: spektral.data.Graph):
+    new_graph = copy.deepcopy(graph)
+    new_graph.a = np.zeros((7, 7))
+    new_graph.x = np.zeros((7, 5))
+    a_shape = graph.a.shape
+    x_shape = graph.x.shape
+
+    new_graph.a[:a_shape[0], :a_shape[1]] = graph.a
+    new_graph.x[:x_shape[0], :x_shape[1]] = graph.x
+    return new_graph
 
 
 class NasBench101Dataset(Dataset):
@@ -155,6 +169,11 @@ class NasBench101Dataset(Dataset):
         return output
 
     def get_metrics(self, matrix, ops):
+        """
+        :param matrix: adj matrix for ModelSpec format
+        :param ops: ops for ModelSpec format
+        :return: dict: The metrics for the architecture corresponding to the given matrix and ops
+        """
         if isinstance(ops[0], int) or isinstance(ops, np.ndarray):
             ops = list(ops)
             ops = [OPS_by_IDX_NB101[i] for i in ops]

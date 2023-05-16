@@ -1,14 +1,17 @@
 import argparse
+import copy
 import random
 import numpy as np
 from tensorflow.python.keras.callbacks import CSVLogger, EarlyStopping
+
+from datasets.nb101_dataset import OP_PRIMITIVES_NB101, NasBench101Dataset
 from datasets.transformation import ReshapeYTransform, OnlyValidAccTransform, OnlyFinalAcc, LabelScale
 from invertible_neural_networks.flow import MMD_multiscale
 from models.GNN import GraphAutoencoder, GraphAutoencoderEnsembleNVP, get_rank_weight
 from models.TransformerAE import TransformerAutoencoderNVP
 import tensorflow as tf
 import os
-from datasets.nb201_dataset import NasBench201Dataset
+from datasets.nb201_dataset import NasBench201Dataset, OP_PRIMITIVES_NB201
 from datasets.utils import train_valid_test_split_dataset, mask_graph_dataset, arch_list_to_set, graph_to_str
 from evalGAE import query_acc_by_ops, ensemble_eval_query_best
 from trainGAE_two_phase import to_loader, mask_for_model, mask_for_spec
@@ -23,7 +26,7 @@ def parse_args():
     parser.add_argument('--train_sample_amount', type=int, default=50, help='Number of samples to train (default: 50)')
     parser.add_argument('--valid_sample_amount', type=int, default=50, help='Number of samples to train (default: 50)')
     parser.add_argument('--query_budget', type=int, default=192)
-    parser.add_argument('--dataset', type=str, default='cifar10-valid')
+    parser.add_argument('--dataset', type=str, default='cifar10-valid', help='Could be nb101, cifar10-valid, cifar100, ImageNet16-120')
     parser.add_argument('--seed', type=int, default=0)
     return parser.parse_args()
 
@@ -286,7 +289,6 @@ class Trainer2(tf.keras.Model):
 
 def train(phase: int, model, loader, train_epochs, logdir, callbacks=None, x_dim=None, y_dim=None,
           z_dim=None, finetune=False, learning_rate=1e-3, no_valid=False):
-
     if phase == 1:
         trainer = Trainer1(model)
     elif phase == 2:
@@ -330,79 +332,90 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
     theta = get_theta(trainer.model, datasets['train_1'])
     logger.info(f'Theta: {theta.numpy().tolist()}')
 
-    num_new_found = 0
     if dataset_name == 'nb101':
         found_arch_list = list(map(mask_for_model, found_arch_list))
-        found_arch_list = list(filter(lambda arch: arch is not None, found_arch_list))
+        found_arch_list = list(filter(lambda arch: arch is not None and arch['x'] is not None, found_arch_list))
 
     found_arch_list_set = arch_list_to_set(found_arch_list)
-    logger.info(f'len of found_arch_list_set {len(found_arch_list_set)}')
-    train_graph_set = [graph_to_str(i) for i in datasets['train_1'].graphs]
-    found_arch_list_set = list(filter(lambda arch: graph_to_str(arch) not in train_graph_set, found_arch_list_set))
-    logger.info(f'len of found_arch_list_set after filter {len(found_arch_list_set)}')
-
+    logger.info(f'Length of found_arch_list_set {len(found_arch_list_set)}')
+    top_acc_list = []
+    top_test_acc_list = []
     # Predict accuracy by INN (performance predictor)
     x = tf.stack([tf.constant(i['x']) for i in found_arch_list_set])
     a = tf.stack([tf.constant(i['a']) for i in found_arch_list_set])
     if tf.shape(x)[0] != 0:
-        a = to_undiredted_adj(a)
-        _, _, _, reg, _ = trainer.model((x, a), training=False)  # (batch, num_nvp, z_dim+y_dim)
+        _, _, _, reg, _ = trainer.model((x, to_undiredted_adj(a)), training=False)  # (batch, num_nvp, z_dim+y_dim)
         reg = reg[:, :, -1]  # (batch, num_nvp)
         theta_expanded = tf.expand_dims(theta, axis=0)  # (1, num_nvp)
         reg = reg * tf.tile(theta_expanded, (tf.shape(reg)[0], 1))
-        reg = tf.reduce_sum(reg, axis=-1)
+        reg = tf.reduce_sum(reg, axis=-1)  # (batch, )
         for i in range(len(found_arch_list_set)):
+            # Assign the predicted accuracy to the architecture
             found_arch_list_set[i]['y'] = reg[i]
 
-    # Select top-k to evaluate true label and add to training dataset
-    top_acc_list = []
-    top_test_acc_list = []
-    found_arch_list_set = sorted(found_arch_list_set, key=lambda g: g['y'], reverse=True)[:top_k]
-    for idx, i in enumerate(found_arch_list_set):
-        if dataset_name != 'nb101':
-            acc = query_acc_by_ops(i['x'], dataset_name)
-            test_acc = query_acc_by_ops(i['x'], dataset_name, on='test-accuracy')
-        else:
-            i = mask_for_spec(i)
-            acc = float(datasets['train'].get_metrics(i['a'], np.argmax(i['x'], axis=-1))[1])
-        top_acc_list.append(acc)
-        top_test_acc_list.append(test_acc)
-        found_arch_list_set[idx]['y'] = np.array([acc])
+    found_arch_list_set = sorted(found_arch_list_set, key=lambda g: g['y'], reverse=True)
 
-    if len(top_acc_list) != 0:
-        logger.info('Top acc list: {}'.format(top_acc_list))
-        logger.info('Top test acc list: {}'.format(top_test_acc_list))
-        logger.info(f'Avg found acc {sum(top_acc_list) / len(top_acc_list)}')
-        logger.info(f'Best found acc {max(top_acc_list)}')
-        logger.info(f'Avg found test acc {sum(top_test_acc_list) / len(top_test_acc_list)}')
-        logger.info(f'Best found test acc {max(top_test_acc_list)}')
-    else:
-        logger.info('Top acc list is [] in this run')
+    def get_new_archs_and_add_to_dataset(arch_list_set):
+        num_new_found = 0
+        found_arch_list_set = copy.deepcopy(arch_list_set)
 
-    train_dict = {graph_to_str(i): i.y.tolist() for i in datasets['train'].graphs}
-
-    # Add top found architecture to training dataset
-    for i in found_arch_list_set:
-        graph_str = graph_to_str(i)
-        if graph_str in train_dict:
-            if graph_str not in top_list and np.isnan(train_dict[graph_str]):
-                datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * repeat)
-                datasets['train_1'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])])
-                top_list.append(graph_str)
-                logger.info(f'Data not in train and not in top_list {i["y"].tolist()}')
-                num_new_found += 1
-            elif graph_str not in top_list and not np.isnan(train_dict[graph_str]):
-                logger.info(f'Data in train but not in top_list {i["y"].tolist()}')
-                top_list.append(graph_str)
+        # Select top-k to evaluate true label and add to training dataset
+        found_arch_list_set = sorted(found_arch_list_set, key=lambda g: g['y'], reverse=True)[:top_k]
+        for idx, i in enumerate(found_arch_list_set):
+            if dataset_name != 'nb101':
+                acc = query_acc_by_ops(i['x'], dataset_name)
+                test_acc = query_acc_by_ops(i['x'], dataset_name, on='test-accuracy')
             else:
-                logger.info(f'Data in train and in top_list {i["y"].tolist()}')
+                i = mask_for_spec(i)
+                acc = float(datasets['train'].get_metrics(i['a'], np.argmax(i['x'], axis=-1))[1])
+            top_acc_list.append(acc)
+            top_test_acc_list.append(test_acc)
+            found_arch_list_set[idx]['y'] = np.array([acc])
+
+        if len(top_acc_list) != 0:
+            logger.info('Top acc list: {}'.format(top_acc_list))
+            logger.info('Top test acc list: {}'.format(top_test_acc_list))
+            logger.info(f'Avg found acc {sum(top_acc_list) / len(top_acc_list)}')
+            logger.info(f'Best found acc {max(top_acc_list)}')
+            logger.info(f'Avg found test acc {sum(top_test_acc_list) / len(top_test_acc_list)}')
+            logger.info(f'Best found test acc {max(top_test_acc_list)}')
         else:
-            if graph_str not in top_list:
-                logger.info(f'Data not in train and not in top_list {i["y"].tolist()}')
-                datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * repeat)
-                datasets['train_1'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])])
-                top_list.append(graph_str)
-                num_new_found += 1
+            logger.info('Top acc list is [] in this run')
+
+        train_dict = {graph_to_str(i): i.y.tolist() for i in datasets['train'].graphs}
+
+        # Add top found architecture to training dataset
+        for i in found_arch_list_set:
+            graph_str = graph_to_str(i)
+            if graph_str in train_dict:
+                if graph_str not in top_list and np.isnan(train_dict[graph_str]):
+                    datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * repeat)
+                    datasets['train_1'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])])
+                    top_list.append(graph_str)
+                    logger.info(f'Data not in train and not in top_list {i["y"].tolist()}')
+                    num_new_found += 1
+                elif graph_str not in top_list and not np.isnan(train_dict[graph_str]):
+                    logger.info(f'Data in train but not in top_list {i["y"].tolist()}')
+                    top_list.append(graph_str)
+                else:
+                    logger.info(f'Data in train and in top_list {i["y"].tolist()}')
+            else:
+                if graph_str not in top_list:
+                    logger.info(f'Data not in train and not in top_list {i["y"].tolist()}')
+                    datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * repeat)
+                    datasets['train_1'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])])
+                    top_list.append(graph_str)
+                    num_new_found += 1
+
+        return num_new_found, found_arch_list_set
+
+    num_new_found, top_arch_list_set = get_new_archs_and_add_to_dataset(found_arch_list_set)
+    if num_new_found == 0:
+        logger.info('No new architecture found, filter the found_arch_list_set')
+        train_graph_set = [graph_to_str(i) for i in datasets['train_1'].graphs]
+        found_arch_list_set = list(filter(lambda arch: graph_to_str(arch) not in train_graph_set, found_arch_list_set))
+        logger.info(f'Length of found_arch_list_set after filter {len(found_arch_list_set)}')
+        num_new_foundm, top_arch_list_set = get_new_archs_and_add_to_dataset(found_arch_list_set)
 
     logger.info(f'{datasets["train"]}')
     logger.info(f'{datasets["train_1"]}')
@@ -427,7 +440,7 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
     results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
     logger.info(str(dict(zip(trainer.metrics_names, results))))
 
-    return top_acc_list, top_test_acc_list, found_arch_list_set, num_new_found
+    return top_acc_list, top_test_acc_list, top_arch_list_set, num_new_found
 
 
 def get_theta(model, dataset, beta=1.):
@@ -499,15 +512,13 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     random.seed(random_seed)
 
     top_k = 5
-    num_ops = 7
-    num_nodes = 8
-    num_adjs = 64
-    is_only_validation_data = True
-    label_epochs = 200
 
+    is_only_validation_data = True
     train_phase = [0, 1]  # 0 not train, 1 train
-    #pretrained_weight = 'logs/cifar10_ensemble/modelGAE_weights_phase2'
-    pretrained_weight = 'logs/phase1_model_cifar100/modelGAE_weights_phase1'
+    if dataset_name == 'nb101':
+        pretrained_weight = 'logs/nb101/nb101_phase1/modelGAE_weights_phase1'
+    else:
+        pretrained_weight = 'logs/phase1_model_cifar100/modelGAE_weights_phase1'
 
     eps_scale = 0.05  # 0.1
     d_model = 32
@@ -523,24 +534,38 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     retrain_epochs = 50
     patience = 50
 
-    # 15624
-    datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, dataset=dataset_name,
-                                                                 hp=str(label_epochs), seed=False),
-                                              ratio=[0.8, 0.1, 0.1],
-                                              shuffle=True,
-                                              shuffle_seed=0)
+    if dataset_name == 'nb101':
+        num_ops = len(OP_PRIMITIVES_NB101)  # 5
+        num_nodes = 7
+        num_adjs = num_nodes ** 2
+        datasets = train_valid_test_split_dataset(NasBench101Dataset(start=0, end=423623),
+                                                  ratio=[0.8, 0.1, 0.1],
+                                                  shuffle=True,
+                                                  shuffle_seed=0)
+    else:
+        # 15624
+        num_ops = len(OP_PRIMITIVES_NB201)  # 7
+        num_nodes = 8
+        num_adjs = num_nodes ** 2
+        label_epochs = 200
+        datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, dataset=dataset_name,
+                                                                     hp=str(label_epochs), seed=False),
+                                                  ratio=[0.8, 0.1, 0.1],
+                                                  shuffle=True,
+                                                  shuffle_seed=0)
 
     for key in datasets:
         if is_only_validation_data:
             datasets[key].apply(OnlyValidAccTransform())
             datasets[key].apply(OnlyFinalAcc())
-            datasets[key].apply(LabelScale(scale=0.01))
+            if dataset_name != 'nb101':
+                datasets[key].apply(LabelScale(scale=0.01))
         else:
             datasets[key].apply(ReshapeYTransform())
 
     x_dim = latent_dim * num_nodes
     y_dim = 1  # 1
-    z_dim = x_dim - 1  # 27
+    z_dim = x_dim - 1  # 127
     #z_dim = latent_dim * 4 - 1
     tot_dim = y_dim + z_dim  # 28
     #pad_dim = tot_dim - x_dim  # 14
@@ -574,11 +599,9 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         logger.info(f'{dict(zip(trainer.metrics_names, results))}')
     else:
         pretrained_model.load_weights(pretrained_weight)
-        #model.load_weights(pretrained_weight)
 
     # Load AE weights from pretrained model
     model.encoder.set_weights(pretrained_model.encoder.get_weights())
-    #model.nvp.set_weights(pretrained_model.nvp.get_weights())
     model.decoder.set_weights(pretrained_model.decoder.get_weights())
 
     global_top_acc_list = []
@@ -620,7 +643,6 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         trainer = Trainer2(retrain_model, x_dim, y_dim, z_dim, finetune=retrain_finetune, is_rank_weight=False)
         trainer.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3), run_eagerly=False)
 
-        # Reset the lr for retrain
         top_list = []
         run = 0
 
@@ -629,7 +651,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
             logger.info(f'Retrain run {run}')
             top_acc_list, top_test_acc_list, top_arch_list, num_new_found = retrain(trainer, datasets, dataset_name, batch_size,
                                                                  retrain_epochs, logdir, top_list, logger,
-                                                                 repeat_label, top_k=5)
+                                                                 repeat_label, top_k)
             now_queried += num_new_found
             if now_queried > query_budget:
                 break
@@ -649,7 +671,8 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
             #if patience_cot >= patience:
             #    break
 
-            if not find_optimal and max(global_top_acc_list) > 0.9160:
+            target_acc = {'cifar10-valid': 0.9160, 'cifar100': 0.7349}
+            if not find_optimal and max(global_top_acc_list) > target_acc.get(dataset_name, 1.0):
                 find_optimal_query = now_queried
                 find_optimal = True
                 break
@@ -661,12 +684,8 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     logger.info(f'Find optimal query amount {find_optimal_query}')
     logger.info(f'Avg found acc {sum(global_top_acc_list) / len(global_top_acc_list)}')
     logger.info(f'Best found acc {max(global_top_acc_list)}')
-    top_test_acc_list = []
-    for i in global_top_arch_list:
-        acc = query_acc_by_ops(i['x'], dataset_name, is_random=False, on='test-accuracy')
-        top_test_acc_list.append(acc)
-    logger.info(f'Avg test acc {sum(top_test_acc_list) / len(top_test_acc_list)}')
-    logger.info(f'Best test acc {max(top_test_acc_list)}')
+    logger.info(f'Avg test acc {sum(global_top_test_acc_list) / len(global_top_test_acc_list)}')
+    logger.info(f'Best test acc {max(global_top_test_acc_list)}')
 
     return sum(global_top_acc_list) / len(global_top_acc_list), max(global_top_acc_list), sum(top_test_acc_list) / len(top_test_acc_list), max(top_test_acc_list)
 
