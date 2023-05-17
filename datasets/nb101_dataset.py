@@ -115,7 +115,7 @@ def mask_padding_vertex_for_spec(a, x):
     return new_a, new_x
 
 
-def pad_graph(graph: spektral.data.Graph):
+def pad_nb101_graph(graph: spektral.data.Graph):
     new_graph = copy.deepcopy(graph)
     new_graph.a = np.zeros((7, 7))
     new_graph.x = np.zeros((7, 5))

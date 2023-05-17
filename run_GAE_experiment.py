@@ -1,5 +1,5 @@
 import numpy as np
-from trainGAE_two_phase import main
+from trainGAE_ensemble import main
 
 
 if __name__ == '__main__':
