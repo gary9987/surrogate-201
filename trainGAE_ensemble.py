@@ -3,7 +3,6 @@ import copy
 import random
 import numpy as np
 from tensorflow.python.keras.callbacks import CSVLogger, EarlyStopping
-
 from datasets.nb101_dataset import OP_PRIMITIVES_NB101, NasBench101Dataset, pad_nb101_graph
 from datasets.transformation import ReshapeYTransform, OnlyValidAccTransform, OnlyFinalAcc, LabelScale
 from invertible_neural_networks.flow import MMD_multiscale
@@ -425,7 +424,7 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
         train_graph_set = [graph_to_str(i) for i in datasets['train_1'].graphs]
         found_arch_list_set = list(filter(lambda arch: graph_to_str(arch) not in train_graph_set, found_arch_list_set))
         logger.info(f'Length of found_arch_list_set after filter {len(found_arch_list_set)}')
-        num_new_foundm, top_arch_list_set = get_new_archs_and_add_to_dataset(dataset_name, datasets, top_k,
+        num_new_found, top_arch_list_set = get_new_archs_and_add_to_dataset(dataset_name, datasets, top_k,
                                                                              repeat, top_list, found_arch_list_set,
                                                                              top_acc_list, top_test_acc_list, logger)
 
