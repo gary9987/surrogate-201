@@ -352,20 +352,29 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
 
     # Select top-k to evaluate true label and add to training dataset
     top_acc_list = []
+    top_test_acc_list = []
     found_arch_list_set = sorted(found_arch_list_set, key=lambda g: g['y'], reverse=True)[:top_k]
     for idx, i in enumerate(found_arch_list_set):
         if dataset_name != 'nb101':
             acc = query_acc_by_ops(i['x'], dataset_name)
+            test_acc = query_acc_by_ops(i['x'], dataset_name, on='test-accuracy')
         else:
             new_i = mask_for_spec(i)
-            acc = float(datasets['train'].get_metrics(new_i['a'], np.argmax(new_i['x'], axis=-1))[1])
+            metrics = datasets['train'].get_metrics(i['a'], np.argmax(i['x'], axis=-1))
+            acc = float(metrics[1])
+            test_acc = float(metrics[2])
+
         top_acc_list.append(acc)
+        top_test_acc_list.append(test_acc)
         found_arch_list_set[idx]['y'] = np.array([acc])
 
     if len(top_acc_list) != 0:
         logger.info('Top acc list: {}'.format(top_acc_list))
+        logger.info('Top test acc list: {}'.format(top_test_acc_list))
         logger.info(f'Avg found acc {sum(top_acc_list) / len(top_acc_list)}')
         logger.info(f'Best found acc {max(top_acc_list)}')
+        logger.info(f'Avg found test acc {sum(top_test_acc_list) / len(top_test_acc_list)}')
+        logger.info(f'Best found test acc {max(top_test_acc_list)}')
     else:
         logger.info('Top acc list is [] in this run')
 
@@ -402,7 +411,7 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
     callbacks = [CSVLogger(os.path.join(logdir, f"learning_curve_phase2_retrain.csv")),
                  # tf.keras.callbacks.ReduceLROnPlateau(monitor='val_total_loss', factor=0.1, patience=15, verbose=1,
                  #                                     min_lr=1e-6),
-                 EarlyStopping(monitor='val_total_loss', patience=15, restore_best_weights=True)]
+                 EarlyStopping(monitor='val_total_loss', patience=10, restore_best_weights=True)]
 
     # tf.keras.backend.set_value(trainer.optimizer.learning_rate, 1e-3)
     trainer.fit(loader['train'].load(),
@@ -415,7 +424,7 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
     results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
     logger.info(str(dict(zip(trainer.metrics_names, results))))
 
-    return top_acc_list, found_arch_list_set, num_new_found
+    return top_acc_list, top_test_acc_list, found_arch_list_set, num_new_found
 
 
 def prepare_model(nvp_config, latent_dim, num_layers, d_model, num_heads, dff, num_ops, num_nodes, num_adjs, dropout_rate, eps_scale):
@@ -441,7 +450,8 @@ def prepare_model(nvp_config, latent_dim, num_layers, d_model, num_heads, dff, n
 
 
 def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_budget):
-    logdir, logger = get_logdir_and_logger(dataset_name, f'trainGAE_two_phase_{seed}.log')
+    logdir, logger = get_logdir_and_logger(os.path.join(f'{train_sample_amount}_{valid_sample_amount}_{query_budget}',
+                                                        dataset_name), f'trainGAE_two_phase_{seed}.log')
     random_seed = seed
     tf.random.set_seed(random_seed)
     random.seed(random_seed)
@@ -465,9 +475,9 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     retrain_finetune = True
     latent_dim = 16
 
-    train_epochs = 1000
-    retrain_epochs = 20
-    patience = 100
+    train_epochs = 500
+    retrain_epochs = 50
+    patience = 50
 
     if dataset_name == 'nb101':
         num_ops = len(OP_PRIMITIVES_NB101)  # 5
@@ -539,7 +549,9 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     model.decoder.set_weights(pretrained_model.decoder.get_weights())
 
     global_top_acc_list = []
+    global_top_test_acc_list = []
     global_top_arch_list = []
+
     if train_phase[1]:
         if finetune:
             batch_size = 256
@@ -557,7 +569,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         loader = to_loader(datasets, batch_size, train_epochs)
         callbacks = [CSVLogger(os.path.join(logdir, f"learning_curve_phase2.csv")),
                      #tensorboard_callback,
-                     tf.keras.callbacks.ReduceLROnPlateau(monitor='val_total_loss', factor=0.1, patience=50, verbose=1,
+                     tf.keras.callbacks.ReduceLROnPlateau(monitor='val_total_loss', factor=0.1, patience=patience//2, verbose=1,
                                                           min_lr=1e-5),
                      EarlyStopping(monitor='val_total_loss', patience=patience, restore_best_weights=True)]
         trainer = train(2, model, loader, train_epochs, logdir, callbacks,
@@ -567,7 +579,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
 
         # Recreate Trainer for retrain
         retrain_model.set_weights(model.get_weights())
-        trainer = Trainer2(retrain_model, x_dim, y_dim, z_dim, finetune=retrain_finetune, is_rank_weight=False)
+        trainer = Trainer2(retrain_model, x_dim, y_dim, z_dim, finetune=retrain_finetune, is_rank_weight=True)
         trainer.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3), run_eagerly=False)
         '''
         if not retrain_finetune:
@@ -580,15 +592,27 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         while now_queried < query_budget and run <= 100:
             logger.info('')
             logger.info(f'Retrain run {run}')
-            top_acc_list, top_arch_list, num_new_found = retrain(trainer, datasets, dataset_name, batch_size,
+            top_acc_list, top_test_acc_list, top_arch_list, num_new_found = retrain(trainer, datasets, dataset_name, batch_size,
                                                                  retrain_epochs, logdir, top_list, logger,
                                                                  repeat_label, top_k)
             now_queried += num_new_found
+            logger.info('Now queried: ' + str(now_queried))
             if now_queried > query_budget:
                 break
             global_top_acc_list += top_acc_list
+            global_top_test_acc_list += top_test_acc_list
             global_top_arch_list += top_arch_list
             run += 1
+
+            logger.info(f'History top acc: {max(global_top_acc_list)}')
+            logger.info(f'History top test acc: {max(global_top_test_acc_list)}')
+            # if patience_cot >= patience:
+            #    break
+
+            target_acc = {'cifar10-valid': 0.9160, 'cifar100': 0.7349}
+            if max(global_top_acc_list) > target_acc.get(dataset_name, 1.0):
+                logger.info(f'Find optimal query amount {now_queried}')
+                break
     else:
         model.load_weights(pretrained_weight)
 
@@ -596,19 +620,10 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     logger.info('Final result')
     logger.info(f'Avg found acc {sum(global_top_acc_list) / len(global_top_acc_list)}')
     logger.info(f'Best found acc {max(global_top_acc_list)}')
-    top_test_acc_list = []
-    for i in global_top_arch_list:
-        if dataset_name != 'nb101':
-            acc = query_acc_by_ops(i['x'], dataset_name, is_random=False, on='test-accuracy')
-        else:
-            new_i = mask_for_spec(i)
-            acc = float(datasets['train'].get_metrics(new_i['a'], np.argmax(new_i['x'], axis=-1))[2])
-        top_test_acc_list.append(acc)
+    logger.info(f'Avg test acc {sum(global_top_test_acc_list) / len(global_top_test_acc_list)}')
+    logger.info(f'Best test acc {max(global_top_test_acc_list)}')
 
-    logger.info(f'Avg test acc {sum(top_test_acc_list) / len(top_test_acc_list)}')
-    logger.info(f'Best test acc {max(top_test_acc_list)}')
-
-    return sum(global_top_acc_list) / len(global_top_acc_list), max(global_top_acc_list), sum(top_test_acc_list) / len(top_test_acc_list), max(top_test_acc_list)
+    return sum(global_top_acc_list) / len(global_top_acc_list), max(global_top_acc_list), sum(global_top_test_acc_list) / len(global_top_test_acc_list), max(global_top_test_acc_list)
 
 
 if __name__ == '__main__':

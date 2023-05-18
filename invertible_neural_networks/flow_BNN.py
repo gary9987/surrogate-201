@@ -1,13 +1,58 @@
 import os
-
 import tensorflow as tf
 import tensorflow_probability as tfp
+from tensorflow_probability.python.distributions import independent as independent_lib
+from tensorflow_probability.python.distributions import normal as normal_lib
+from tensorflow_probability.python.util import SeedStream
+from tensorflow_probability.python import random as tfp_random
 
 tfpl = tfp.layers
 tfk = tf.keras
 tfkl = tfk.layers
 tfkc = tfk.callbacks
 K = tfk.backend
+
+
+class ForceSTDDenseFlipout(tfpl.DenseFlipout):
+    def __init__(self, std, **kwargs):
+        super(ForceSTDDenseFlipout, self).__init__(**kwargs)
+        self.std = tfp.math.softplus_inverse(std)
+
+    def _apply_variational_kernel(self, inputs):
+        if (not isinstance(self.kernel_posterior, independent_lib.Independent) or
+                not isinstance(self.kernel_posterior.distribution, normal_lib.Normal)):
+            raise TypeError(
+                '`DenseFlipout` requires '
+                '`kernel_posterior_fn` produce an instance of '
+                '`tfd.Independent(tfd.Normal)` '
+                '(saw: \"{}\").'.format(self.kernel_posterior.name))
+        self.kernel_posterior_affine = tfp.distributions.Normal(
+            loc=tf.zeros_like(self.kernel_posterior.distribution.loc),
+            scale=tf.fill(tf.shape(self.kernel_posterior.distribution.scale), self.std))
+        self.kernel_posterior_affine_tensor = (
+            self.kernel_posterior_tensor_fn(self.kernel_posterior_affine))
+        self.kernel_posterior_tensor = None
+
+        input_shape = tf.shape(inputs)
+        batch_shape = input_shape[:-1]
+
+        seed_stream = SeedStream(self.seed, salt='DenseFlipout')
+
+        sign_input = tfp_random.rademacher(
+            input_shape,
+            dtype=inputs.dtype,
+            seed=seed_stream())
+        sign_output = tfp_random.rademacher(
+            tf.concat([batch_shape,
+                       tf.expand_dims(self.units, 0)], 0),
+            dtype=inputs.dtype,
+            seed=seed_stream())
+        perturbed_inputs = tf.matmul(
+            inputs * sign_input, self.kernel_posterior_affine_tensor) * sign_output
+
+        outputs = tf.matmul(inputs, self.kernel_posterior.distribution.loc)
+        outputs += perturbed_inputs
+        return outputs
 
 
 class NN(tfkl.Layer):
@@ -20,13 +65,15 @@ class NN(tfkl.Layer):
         self.n_layer = n_layer
         self.n_hid = n_hid
         self.layer_list = []
+        self.std = 0.6
         for _ in range(n_layer):
-            self.layer_list.append(tfpl.DenseFlipout(n_hid,
-                                                     activation=activation,
-                                                     bias_posterior_fn=tfp.layers.default_mean_field_normal_fn()))
+            self.layer_list.append(ForceSTDDenseFlipout(std=self.std,
+                                                         units=n_hid,
+                                                         activation=activation,
+                                                         bias_posterior_fn=tfp.layers.default_mean_field_normal_fn()))
 
-        self.log_s_layer = tfpl.DenseFlipout(n_dim // 2, activation='tanh', name='log_s_layer', bias_posterior_fn=tfp.layers.default_mean_field_normal_fn())
-        self.t_layer = tfpl.DenseFlipout(n_dim // 2, activation='linear', name='t_layer', bias_posterior_fn=tfp.layers.default_mean_field_normal_fn())
+        self.log_s_layer = ForceSTDDenseFlipout(std=self.std, units=n_dim // 2, activation='tanh', name='log_s_layer', bias_posterior_fn=tfp.layers.default_mean_field_normal_fn())
+        self.t_layer = ForceSTDDenseFlipout(std=self.std, units=n_dim // 2, activation='linear', name='t_layer', bias_posterior_fn=tfp.layers.default_mean_field_normal_fn())
 
     def call(self, x):
         for layer in self.layer_list:

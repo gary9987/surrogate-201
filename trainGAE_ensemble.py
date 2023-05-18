@@ -698,7 +698,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     logger.info(f'Avg test acc {sum(global_top_test_acc_list) / len(global_top_test_acc_list)}')
     logger.info(f'Best test acc {max(global_top_test_acc_list)}')
 
-    return sum(global_top_acc_list) / len(global_top_acc_list), max(global_top_acc_list), sum(top_test_acc_list) / len(top_test_acc_list), max(top_test_acc_list)
+    return sum(global_top_acc_list) / len(global_top_acc_list), max(global_top_acc_list), sum(global_top_test_acc_list) / len(global_top_test_acc_list), max(global_top_test_acc_list)
 
 
 if __name__ == '__main__':
