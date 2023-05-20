@@ -39,7 +39,7 @@ class NN(tfkl.Layer):
 
 
 class NVPCouplingLayer(tfkl.Layer):
-    def __init__(self, inp_dim, n_hid_layer, n_hid_dim, name, shuffle_type):
+    def __init__(self, inp_dim, n_hid_layer, n_hid_dim, name, shuffle_type, use_bias=True):
         super(NVPCouplingLayer, self).__init__(name=name)
         '''Implementation of Coupling layers in Dinh et al (2017)
 
@@ -54,7 +54,7 @@ class NVPCouplingLayer(tfkl.Layer):
         self.n_hid_layer = n_hid_layer
         self.n_hid_dim = n_hid_dim
         self.shuffle_type = shuffle_type
-        self.nn = NN(inp_dim, n_hid_layer, n_hid_dim)
+        self.nn = NN(inp_dim, n_hid_layer, n_hid_dim, use_bias=use_bias)
         self.idx = tf.Variable(list(range(self.inp_dim)),
                                shape=(self.inp_dim,),
                                trainable=False,

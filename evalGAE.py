@@ -131,7 +131,7 @@ def eval_query_best(model: tf.keras.Model, dataset_name, x_dim: int, z_dim: int,
     return invalid, sum(y) / len(y), max(y), found_arch_list
 
 
-def ensemble_inverse_from_acc(model: tf.keras.Model, num_sample_z: int, x_dim: int, z_dim: int, to_inv_acc, version=2):
+def ensemble_inverse_from_acc(model: tf.keras.Model, num_sample_z: int, x_dim: int, z_dim: int, to_inv_acc, noise_std=0., version=2):
     batch_size = int(tf.shape(to_inv_acc)[0])
     y = tf.repeat(to_inv_acc, num_sample_z, axis=0)  # (batch_size * num_sample_z, 1)
     z = np.random.multivariate_normal([0.] * z_dim, np.eye(z_dim),
@@ -147,7 +147,7 @@ def ensemble_inverse_from_acc(model: tf.keras.Model, num_sample_z: int, x_dim: i
     else:
         raise ValueError('version')
 
-    _, adj, ops_cls, adj_cls = model.decode(rev_latent)
+    _, adj, ops_cls, adj_cls = model.decode(rev_latent + tf.random.normal(tf.shape(rev_latent), 0., noise_std))  # (batch_size, num_sample_z, 8, 8), (batch_size, num_sample_z, 8, 7)
     ops_cls = tf.reshape(ops_cls, (batch_size * model.num_nvp, num_sample_z, -1, model.num_ops))  # (batch_size, num_sample_z, 8, 7)
     ops_vote = tf.reduce_sum(ops_cls, axis=1).numpy()  # (batch_size, 1, 8 * 7)
 
@@ -167,8 +167,9 @@ def ensemble_eval_query_best(model: tf.keras.Model, dataset_name, x_dim: int, z_
     invalid = 0
     to_inv_acc = 1.0
     to_inv = tf.repeat(tf.reshape(tf.constant(to_inv_acc), [-1, 1]), query_amount, axis=0)
-    to_inv += noise_scale * tf.random.normal(tf.shape(to_inv))
-    ops_idx_lis, adj_list = ensemble_inverse_from_acc(model, num_sample_z=1, x_dim=x_dim, z_dim=z_dim, to_inv_acc=to_inv, version=version)
+    #to_inv += noise_scale * tf.random.normal(tf.shape(to_inv))
+    ops_idx_lis, adj_list = ensemble_inverse_from_acc(model, num_sample_z=1, x_dim=x_dim, z_dim=z_dim,
+                                                      noise_std=noise_scale, to_inv_acc=to_inv, version=version)
     for ops_idx, adj in zip(ops_idx_lis, adj_list):
         try:
             if dataset_name != 'nb101':

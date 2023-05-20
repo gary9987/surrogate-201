@@ -1,4 +1,5 @@
 import copy
+import random
 import numpy as np
 from spektral.data import Graph
 from datasets.bananas_path_encoding_nb201 import Cell
@@ -131,7 +132,7 @@ def to_latent_feature_data(graph_dataset, reg_size):
 
 
 def mask_graph_dataset(graph_dataset, reg_size: int, non_nan_repeat: int, random_seed=0):
-    new_graph_dataset = copy.copy(graph_dataset)
+    new_graph_dataset = copy.deepcopy(graph_dataset)
     if reg_size == -1:
         nan_size = 0
     else:
@@ -176,4 +177,17 @@ def arch_list_to_set(arch_list):
     return arch_list_set
 
 
+def get_rank_weight(y_true, num_repeat):
+    outputs_argsort = np.argsort(-np.asarray(y_true))
+    ranks = np.argsort(outputs_argsort)
+    return 1 / (10e-3 * len(y_true) * num_repeat + (ranks * num_repeat))
 
+
+def weighted_graph_dataset_element(graph_dataset, num_repeat: int):
+    new_graph_dataset = copy.deepcopy(graph_dataset)
+    y_true = [data.y[-1] for data in new_graph_dataset]
+    weights = get_rank_weight(y_true, num_repeat)
+    for idx, graph in enumerate(new_graph_dataset):
+        new_graph_dataset[idx].y = np.array([weights[idx], new_graph_dataset[idx].y[-1]])
+    new_graph_dataset.graphs = random.choices(new_graph_dataset.graphs, weights=weights, k=len(new_graph_dataset) * num_repeat)
+    return new_graph_dataset

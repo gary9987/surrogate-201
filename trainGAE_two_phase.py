@@ -589,7 +589,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         # Reset the lr for retrain
         top_list = []
         run = 0
-        while now_queried < query_budget and run <= 100:
+        while now_queried < query_budget and run <= 200:
             logger.info('')
             logger.info(f'Retrain run {run}')
             top_acc_list, top_test_acc_list, top_arch_list, num_new_found = retrain(trainer, datasets, dataset_name, batch_size,

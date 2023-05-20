@@ -57,7 +57,8 @@ class GINEncoder(Model):
 
 
 class TransformerDecoder(Decoder):
-    def __init__(self, num_layers, d_model, num_heads, dff, input_length, num_ops, num_nodes, num_adjs, dropout_rate=0.0):
+    def __init__(self, num_layers, d_model, num_heads, dff, input_length, num_ops, num_nodes, num_adjs,
+                 dropout_rate=0.0):
         super(TransformerDecoder, self).__init__(num_layers, d_model, num_heads, dff, num_ops, num_nodes, num_adjs,
                                                  dropout_rate)
         self.pos_embedding = PositionalEmbedding(d_model=d_model, input_length=input_length)
@@ -71,7 +72,6 @@ class TransformerDecoder(Decoder):
         self.adj_weight = tf.keras.layers.Dense(num_nodes, activation='relu')
         self.adj_cls = tf.keras.layers.Dense(2, activation='softmax')
 
-
     def call(self, x):
         x = self.pos_embedding(x)
         x = self.dropout(x)
@@ -80,21 +80,23 @@ class TransformerDecoder(Decoder):
 
         ops_cls = self.ops_cls(x)
 
-        x = self.adj_weight(x) # (8, 16) -> (8, 8)
-        x = tf.reshape(x, (tf.shape(x)[0], -1, 1)) #(8, 8, 1)
+        x = self.adj_weight(x)  # (8, 16) -> (8, 8)
+        x = tf.reshape(x, (tf.shape(x)[0], -1, 1))  # (8, 8, 1)
         adj_cls = self.adj_cls(x)
-        #ops_cls = tf.stack([self.ops_cls[i](flatten_x) for i in range(self.num_nodes)], axis=-1)
-        #ops_cls = tf.transpose(ops_cls, (0, 2, 1))
+        # ops_cls = tf.stack([self.ops_cls[i](flatten_x) for i in range(self.num_nodes)], axis=-1)
+        # ops_cls = tf.transpose(ops_cls, (0, 2, 1))
 
-        #adj_cls = tf.stack([self.adj_cls[i](flatten_x) for i in range(self.num_adjs)], axis=-1)
-        #adj_cls = tf.transpose(adj_cls, (0, 2, 1))
+        # adj_cls = tf.stack([self.adj_cls[i](flatten_x) for i in range(self.num_adjs)], axis=-1)
+        # adj_cls = tf.transpose(adj_cls, (0, 2, 1))
 
         return ops_cls, adj_cls
 
 
 class GraphAutoencoder(tf.keras.Model):
-    def __init__(self, latent_dim, num_layers, d_model, num_heads, dff, num_ops, num_nodes, num_adjs, eps_scale=0.01, dropout_rate=0.0):
+    def __init__(self, latent_dim, num_layers, d_model, num_heads, dff, num_ops, num_nodes, num_adjs, eps_scale=0.01,
+                 dropout_rate=0.0):
         super(GraphAutoencoder, self).__init__()
+        self.ckpt_weights = None
         self.d_model = d_model
         self.num_ops = num_ops
         self.num_adjs = num_adjs
@@ -104,8 +106,9 @@ class GraphAutoencoder(tf.keras.Model):
         self.encoder = GINEncoder(self.latent_dim, [128, 128, 128, 128], 'relu', dropout_rate)
 
         self.decoder = TransformerDecoder(num_layers=num_layers, d_model=d_model, num_heads=num_heads,
-                               dff=dff, input_length=num_nodes, num_ops=num_ops, num_nodes=num_nodes, num_adjs=num_adjs,
-                               dropout_rate=dropout_rate)
+                                          dff=dff, input_length=num_nodes, num_ops=num_ops, num_nodes=num_nodes,
+                                          num_adjs=num_adjs,
+                                          dropout_rate=dropout_rate)
 
     def sample(self, mean, log_var, eps_scale=0.01):
         eps = tf.random.normal(shape=tf.shape(mean))
@@ -114,7 +117,8 @@ class GraphAutoencoder(tf.keras.Model):
     def call(self, inputs):
         latent_mean, latent_var = self.encoder(inputs)  # (batch_size, context_len, d_model)
         c = self.sample(latent_mean, latent_var, self.eps_scale)
-        kl_loss = tf.reduce_mean(-0.5 * tf.reduce_sum(1 + latent_var - tf.square(latent_mean) - tf.exp(latent_var), axis=-1))
+        kl_loss = tf.reduce_mean(
+            -0.5 * tf.reduce_sum(1 + latent_var - tf.square(latent_mean) - tf.exp(latent_var), axis=-1))
 
         ops_cls, adj_cls = self.decoder(c)  # (batch_size, target_len, d_model)
 
@@ -131,6 +135,14 @@ class GraphAutoencoder(tf.keras.Model):
             ops.append(tf.argmax(ops_cls[i], axis=-1))
         adj = tf.cast(tf.argmax(adj_cls, axis=-1), tf.float32)
         return ops, adj, ops_cls, adj_cls
+
+    def get_weights_to_self_ckpt(self):
+        self.ckpt_weights = self.get_weights()
+
+    def set_weights_from_self_ckpt(self):
+        if self.ckpt_weights is None:
+            raise ValueError('No weights to set')
+        self.set_weights(self.ckpt_weights)
 
 
 class GraphAutoencoderNVP(GraphAutoencoder):
@@ -159,7 +171,7 @@ class GraphAutoencoderNVP_BNN(GraphAutoencoder):
     def __init__(self, nvp_config, latent_dim, num_layers, d_model, num_heads, dff, num_ops, num_nodes, num_adjs,
                  eps_scale=0.01, dropout_rate=0.0):
         super(GraphAutoencoderNVP_BNN, self).__init__(latent_dim, num_layers, d_model, num_heads, dff, num_ops,
-                                                  num_nodes, num_adjs, eps_scale, dropout_rate)
+                                                      num_nodes, num_adjs, eps_scale, dropout_rate)
         if nvp_config['inp_dim'] is None:
             nvp_config['inp_dim'] = latent_dim
 
@@ -179,10 +191,11 @@ class GraphAutoencoderNVP_BNN(GraphAutoencoder):
 
 
 class GraphAutoencoderEnsembleNVP(GraphAutoencoder):
-    def __init__(self, num_nvp, nvp_config, latent_dim, num_layers, d_model, num_heads, dff, num_ops, num_nodes, num_adjs,
+    def __init__(self, num_nvp, nvp_config, latent_dim, num_layers, d_model, num_heads, dff, num_ops, num_nodes,
+                 num_adjs,
                  eps_scale=0.01, dropout_rate=0.0):
         super(GraphAutoencoderEnsembleNVP, self).__init__(latent_dim, num_layers, d_model, num_heads, dff, num_ops,
-                                                  num_nodes, num_adjs, eps_scale, dropout_rate)
+                                                          num_nodes, num_adjs, eps_scale, dropout_rate)
         if nvp_config['inp_dim'] is None:
             nvp_config['inp_dim'] = latent_dim
 
@@ -202,10 +215,11 @@ class GraphAutoencoderEnsembleNVP(GraphAutoencoder):
 
 
 class GraphAutoencoderEnsembleNVP_BNN(GraphAutoencoder):
-    def __init__(self, num_nvp, nvp_config, latent_dim, num_layers, d_model, num_heads, dff, num_ops, num_nodes, num_adjs,
+    def __init__(self, num_nvp, nvp_config, latent_dim, num_layers, d_model, num_heads, dff, num_ops, num_nodes,
+                 num_adjs,
                  eps_scale=0.01, dropout_rate=0.0):
         super(GraphAutoencoderEnsembleNVP_BNN, self).__init__(latent_dim, num_layers, d_model, num_heads, dff, num_ops,
-                                                  num_nodes, num_adjs, eps_scale, dropout_rate)
+                                                              num_nodes, num_adjs, eps_scale, dropout_rate)
         if nvp_config['inp_dim'] is None:
             nvp_config['inp_dim'] = latent_dim
 
@@ -225,7 +239,6 @@ class GraphAutoencoderEnsembleNVP_BNN(GraphAutoencoder):
 
 
 def bpr_loss(y_true, y_pred):
-
     N = tf.shape(y_true)[0]  # y_true.shape[0] = batch size
     lc_length = tf.shape(y_true)[1]
 
