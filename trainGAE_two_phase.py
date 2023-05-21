@@ -579,7 +579,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
 
         # Recreate Trainer for retrain
         retrain_model.set_weights(model.get_weights())
-        trainer = Trainer2(retrain_model, x_dim, y_dim, z_dim, finetune=retrain_finetune, is_rank_weight=True)
+        trainer = Trainer2(retrain_model, x_dim, y_dim, z_dim, finetune=retrain_finetune, is_rank_weight=False)
         trainer.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3), run_eagerly=False)
         '''
         if not retrain_finetune:

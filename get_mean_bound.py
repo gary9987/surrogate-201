@@ -16,7 +16,7 @@ from trainGAE_two_phase import to_loader, mask_for_model, mask_for_spec
 from utils.py_utils import get_logdir_and_logger
 from spektral.data import Graph
 from utils.tf_utils import to_undiredted_adj
-from cal_upper_bound import get_bound
+from cal_aggregate_bound import get_bound
 
 
 def parse_args():

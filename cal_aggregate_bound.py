@@ -18,7 +18,6 @@ def after_theta_mse(dataset, model, theta):
         pred_y = 0
         for i in range(num_nvp):
             pred_y += float(y_out[0][i][-1]) * theta[i]
-        #print(y, pred_y)
         mse += (pred_y - y) ** 2 / n
     return mse
 
@@ -82,93 +81,70 @@ def get_bound(dataset, model):
     return first_term + rem_term
 
 
+def get_theta_list(model, dataset, beta=1. + 1e-16):
+    num_nvp = len(model.nvp_list)
+    n = len(dataset)
+    theta_list = [tf.constant([1. / num_nvp] * num_nvp)]
+
+    x = tf.stack([tf.constant(i.x, dtype=tf.float32) for i in dataset])
+    a = tf.stack([tf.constant(i.a, dtype=tf.float32) for i in dataset])
+    a = to_undiredted_adj(a)
+    _, _, _, regs, _ = model((x, a), training=False)
+    # regs: (n, num_nvp, z_dim+y_dim)
+
+    loss_cache = np.zeros((n, num_nvp)).astype(np.float32)
+    loss_cache2 = []
+    for i in range(n):
+        under_q = 0
+        for k in range(num_nvp):
+            loss = 0.
+            for m in range(i + 1):
+                if m == i:
+                    loss_cache[m][k] = tf.keras.losses.mean_squared_error(dataset[m].y, regs[m][k][-1])
+                loss += loss_cache[m][k]
+
+            under_q += tf.cast(tf.exp(-(beta ** -1) * loss), tf.float32)
+
+        upper_q = 0
+        for m in range(i + 1):
+            if m == i:
+                y = dataset[m].y
+                y = tf.expand_dims(y, axis=0)
+                y = tf.expand_dims(y, axis=0)
+                y = tf.repeat(y, num_nvp, axis=1)
+                loss_cache2.append(tf.keras.losses.mean_squared_error(y, regs[m][:, -1:]))
+            upper_q += loss_cache2[m]
+
+        upper_q = tf.exp(-(beta ** -1) * upper_q)
+        theta_list.append(tf.squeeze(upper_q / under_q))
+
+    return theta_list
+
+
 if __name__ == '__main__':
-    logdir = 'logs/cifar10-valid/aggregate30nvp'
+    logdir = 'logs/cifar10-valid/aggregate50'
     logging.basicConfig(filename=f'{logdir}/cal_upper_bound.log', level=logging.INFO)
 
     with open(f'{logdir}/model.pkl', 'rb') as f:
         model: GraphAutoencoderEnsembleNVP = pickle.load(f)
     with open(f'{logdir}/datasets.pkl', 'rb') as f:
         datasets = pickle.load(f)
-    with open(f'{logdir}/theta.pkl', 'rb') as f:
-        theta = pickle.load(f)
+    #with open(f'{logdir}/theta.pkl', 'rb') as f:
+    #    theta = pickle.load(f)
 
-    weight_list = []
-    for nvp in model.nvp_list:
-        weight = nvp.get_weights()
-        weight_list.append(np.array(weight))
+    # Calculate paper: learning by mirror average formula (5.5) left term
+    expected_mse = 0
+    theta_list = get_theta_list(model, datasets['train_1'])
+    for i in range(1, len(datasets['train_1']) + 1):
+        expected_mse += after_theta_mse(datasets['train_1'][:i], model, theta_list[i-1]) / len(datasets['train_1'])
 
-    mean_weight = np.mean(weight_list, axis=0).tolist()
+    logging.info(f'expected mse {expected_mse}')
 
-
-    eps_scale = 0.05  # 0.1
-    d_model = 32
-    dropout_rate = 0.0
-    dff = 256
-    num_layers = 3
-    num_heads = 3
-    finetune = True
-    retrain_finetune = True
-    latent_dim = 16
-    num_nodes = 8
-    num_ops = 7
-    num_adjs = num_nodes ** 2
-    x_dim = latent_dim * num_nodes
-    y_dim = 1  # 1
-    z_dim = x_dim - 1  # 27
-    # z_dim = latent_dim * 4 - 1
-    tot_dim = y_dim + z_dim  # 28
-    # pad_dim = tot_dim - x_dim  # 14
-
-    num_nvp = 30
-
-    #min_loss_nvp_idx = get_min_loss_nvp_idx(datasets, model)
-    #logging.info(f'min_loss_nvp_idx {min_loss_nvp_idx}')
-
-    weight_mse = []
-    for i in range(num_nvp):
-        c = (weight_list[i] - mean_weight) ** 2
-        c = [np.mean(i) for i in c]
-        weight_mse.append(np.mean(c))
-    logging.info(f'{weight_mse}')
-    logging.info(f'np.argmin(weight_mse) {np.argmin(weight_mse)}')
-
-    weight_list = []
-    for l in range(len(model.nvp_list[0].get_weights())):
-        tmp = None
-        shape = model.nvp_list[0].get_weights()[l].shape
-        for nvp in model.nvp_list:
-            if tmp is None:
-                tmp = np.reshape(nvp.get_weights()[l], (-1, 1))
-            else:
-                tmp = np.concatenate((tmp, np.reshape(nvp.get_weights()[l], (-1, 1))), axis=-1)  # (num_params, num_nvp)
-
-        mean = np.mean(tmp, axis=-1)
-        std = np.std(tmp, axis=-1)
-        sample_weight = np.random.normal(loc=mean, scale=std, size=(np.shape(mean)[0]))
-        #sample_weight = np.random.normal(loc=mean, scale=std, size=(100, np.shape(mean)[0]))
-        #sample_weight = np.mean(sample_weight, axis=0)
-        weight_list.append(np.reshape(sample_weight, shape))
-
-    model.nvp_list[0].set_weights(weight_list)
-    mse = 0
-    num_nvp = len(model.nvp_list)
-    n = len(datasets['train_1'])
-    for idx, data in enumerate(datasets['train_1']):
-        y = data.y[-1]
-        xa = (tf.constant([data.x]), to_undiredted_adj(tf.constant([data.a])))
-        #xa = (tf.constant([data.x]), tf.constant([data.a]))
-        ops_cls, adj_cls, kl_loss, y_out, x_encoding = model(xa, training=False)
-        pred_y = 0
-        pred_y += float(y_out[0][0][-1])
-        print(y, pred_y)
-        mse += (pred_y - y) ** 2 / n
-    print(mse)
     '''
     bound = get_bound(datasets['train_1'], model)
 
     logging.info(f'bound {bound}')
     logging.info(f'bound^2 {bound ** 2}')
     '''
-    mse = after_theta_mse(datasets['train_1'], model, theta)
-    logging.info(f'after theta mse {mse}')
+    #mse = after_theta_mse(datasets['train_1'], model, theta)
+    #logging.info(f'after theta mse {mse}')
