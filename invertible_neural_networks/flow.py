@@ -187,7 +187,7 @@ class NVP(tfk.Model):
         self.shuffle_type = shuffle_type
         self.AffineLayers = []
         for i in range(n_couple_layer):
-            layer = TwoNVPCouplingLayers(
+            layer = NVPCouplingLayer(
                 inp_dim, n_hid_layer, n_hid_dim,
                 name=f'Layer{i}', shuffle_type=shuffle_type, use_bias=use_bias)
             self.AffineLayers.append(layer)
