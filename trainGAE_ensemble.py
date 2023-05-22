@@ -383,6 +383,7 @@ def get_new_archs_and_add_to_dataset(dataset_name, datasets, top_k, repeat, top_
                 datasets['train_1'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])])
                 top_list.append(graph_str)
                 logger.info(f'Data not in train and not in top_list {i["y"].tolist()}')
+                logger.info(f'Add to train {i["x"].tolist()} {i["a"].tolist()} {i["y"].tolist()}')
                 num_new_found += 1
             elif graph_str not in top_list and not np.isnan(visited[graph_str]):
                 logger.info(f'Data in train but not in top_list {i["y"].tolist()}')
@@ -392,6 +393,7 @@ def get_new_archs_and_add_to_dataset(dataset_name, datasets, top_k, repeat, top_
         else:
             if graph_str not in top_list:
                 logger.info(f'Data not in train and not in top_list {i["y"].tolist()}')
+                logger.info(f'Add to train {i["x"].tolist()} {i["a"].tolist()} {i["y"].tolist()}')
                 datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * repeat)
                 datasets['train_1'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])])
                 top_list.append(graph_str)

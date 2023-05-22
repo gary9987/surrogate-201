@@ -2,7 +2,7 @@ from typing import Union
 import numpy as np
 import tensorflow as tf
 from datasets.nb101_dataset import NasBench101Dataset, mask_padding_vertex_for_spec, mask_padding_vertex_for_model
-from datasets.nb201_dataset import NasBench201Dataset, OPS_by_IDX_201
+from datasets.nb201_dataset import NasBench201Dataset, OPS_by_IDX_201, ADJACENCY
 from datasets.transformation import OnlyValidAccTransform, ReshapeYTransform, OnlyFinalAcc, LabelScale
 from datasets.utils import train_valid_test_split_dataset, ops_list_to_nb201_arch_str
 from models.GNN import GraphAutoencoderNVP
@@ -67,6 +67,7 @@ def query_acc_by_ops(ops: Union[list, np.ndarray], dataset_name, is_random=False
         ops_idx = ops
 
     ops = [OPS_by_IDX_201[i] for i in ops_idx]
+    assert ops[0] == 'input' and ops[-1] == 'output'
     arch_str = ops_list_to_nb201_arch_str(ops)
     idx = nb201api.query_index_by_arch(arch_str)
     meta_info = nb201api.query_meta_info_by_index(idx, hp='200')
@@ -98,7 +99,10 @@ def eval_query_best(model: tf.keras.Model, dataset_name, x_dim: int, z_dim: int,
     for ops_idx, adj, query_acc in zip(ops_idx_lis, adj_list, to_inv[:, -1]):
         try:
             if dataset_name != 'nb101':
-                acc = query_acc_by_ops(ops_idx, dataset_name, is_random=False)
+                if np.array_equal(adj, ADJACENCY):
+                    acc = query_acc_by_ops(ops_idx, dataset_name, is_random=False)
+                else:
+                    continue
             else:
                 adj_for_spec, ops_idx_for_spec = mask_padding_vertex_for_spec(adj, ops_idx)
                 acc = nb101_dataset.get_metrics(adj_for_spec, ops_idx_for_spec)[1]
@@ -173,7 +177,10 @@ def ensemble_eval_query_best(model: tf.keras.Model, dataset_name, x_dim: int, z_
     for ops_idx, adj in zip(ops_idx_lis, adj_list):
         try:
             if dataset_name != 'nb101':
-                acc = query_acc_by_ops(ops_idx, dataset_name, is_random=False)
+                if np.array_equal(adj, ADJACENCY):
+                    acc = query_acc_by_ops(ops_idx, dataset_name, is_random=False)
+                else:
+                    continue
             else:
                 adj_for_spec, ops_idx_for_spec = mask_padding_vertex_for_spec(adj, ops_idx)
                 acc = nb101_dataset.get_metrics(adj_for_spec, ops_idx_for_spec)[1]  # [1] for valid acc
