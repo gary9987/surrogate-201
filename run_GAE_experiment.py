@@ -1,6 +1,7 @@
 import numpy as np
 from trainGAE_ensemble import main
-
+import tensorflow as tf
+import gc
 
 if __name__ == '__main__':
     invalid_list = []
@@ -14,6 +15,8 @@ if __name__ == '__main__':
         best_acc_list.append(best_acc)
         avg_test_acc_list.append(avg_test_acc)
         best_test_acc_list.append(best_test_acc)
+        tf.keras.backend.clear_session()
+        gc.collect()
 
     print(avg_acc_list)
     print(best_acc_list)

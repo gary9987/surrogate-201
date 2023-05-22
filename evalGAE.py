@@ -129,6 +129,7 @@ def eval_query_best(model: tf.keras.Model, dataset_name, x_dim: int, z_dim: int,
     plt.xlim(0.85, 1.2)
     plt.ylim(0.85, 1.2)
     plt.savefig('top.png')
+    to_inv = None
     if len(y) == 0:
         return invalid, 0, 0, found_arch_list
 
@@ -177,10 +178,8 @@ def ensemble_eval_query_best(model: tf.keras.Model, dataset_name, x_dim: int, z_
     for ops_idx, adj in zip(ops_idx_lis, adj_list):
         try:
             if dataset_name != 'nb101':
-                if np.array_equal(adj, ADJACENCY):
-                    acc = query_acc_by_ops(ops_idx, dataset_name, is_random=False)
-                else:
-                    continue
+                assert np.array_equal(adj, ADJACENCY)
+                acc = query_acc_by_ops(ops_idx, dataset_name, is_random=False)
             else:
                 adj_for_spec, ops_idx_for_spec = mask_padding_vertex_for_spec(adj, ops_idx)
                 acc = nb101_dataset.get_metrics(adj_for_spec, ops_idx_for_spec)[1]  # [1] for valid acc
@@ -199,6 +198,7 @@ def ensemble_eval_query_best(model: tf.keras.Model, dataset_name, x_dim: int, z_
             print('invalid')
             invalid += 1
 
+    to_inv = None
     if len(y) == 0:
         return invalid, 0, 0, found_arch_list
 

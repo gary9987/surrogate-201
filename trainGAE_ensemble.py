@@ -1,5 +1,4 @@
 import argparse
-import copy
 import random
 from typing import List, Union
 import numpy as np
@@ -352,7 +351,6 @@ def get_new_archs_and_add_to_dataset(dataset_name, datasets, top_k, repeat, top_
     """
     logger = logging.getLogger(__name__)
     num_new_found = 0
-    #found_arch_list_set = copy.deepcopy(arch_list_set)
 
     # Select top-k to evaluate true label and add to training dataset
     found_arch_list_set = sorted(found_arch_list_set, key=lambda g: g['y'], reverse=True)[:top_k]
@@ -372,19 +370,21 @@ def get_new_archs_and_add_to_dataset(dataset_name, datasets, top_k, repeat, top_
     else:
         logger.info('Top acc list is [] in this run')
 
-    #visited = {graph_to_str(i): i.y.tolist() for i in datasets['train'].graphs}
-
     # Add top found architecture to training dataset
+    valid_visited = [graph_to_str(i) for i in datasets['valid_1'].graphs]
     for i in found_arch_list_set:
         graph_str = graph_to_str(i)
         if graph_str in visited:
             if graph_str not in top_list and np.isnan(visited[graph_str]):
+                if graph_str not in valid_visited:
+                    logger.info(f'Data not in train and not in top_list {i["y"].tolist()}')
+                    num_new_found += 1
+                else:
+                    logger.info(f'Data in valid but not in train {i["y"].tolist()}')
+                logger.info(f'Add to train {i["x"].tolist()} {i["a"].tolist()} {i["y"].tolist()}')
                 datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * repeat)
                 datasets['train_1'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])])
                 top_list.append(graph_str)
-                logger.info(f'Data not in train and not in top_list {i["y"].tolist()}')
-                logger.info(f'Add to train {i["x"].tolist()} {i["a"].tolist()} {i["y"].tolist()}')
-                num_new_found += 1
             elif graph_str not in top_list and not np.isnan(visited[graph_str]):
                 logger.info(f'Data in train but not in top_list {i["y"].tolist()}')
                 top_list.append(graph_str)
@@ -392,12 +392,15 @@ def get_new_archs_and_add_to_dataset(dataset_name, datasets, top_k, repeat, top_
                 logger.info(f'Data in train and in top_list {i["y"].tolist()}')
         else:
             if graph_str not in top_list:
-                logger.info(f'Data not in train and not in top_list {i["y"].tolist()}')
+                if graph_str not in valid_visited:
+                    logger.info(f'Data not in train and not in top_list {i["y"].tolist()}')
+                    num_new_found += 1
+                else:
+                    logger.info(f'Data in valid but not in train {i["y"].tolist()}')
                 logger.info(f'Add to train {i["x"].tolist()} {i["a"].tolist()} {i["y"].tolist()}')
                 datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * repeat)
                 datasets['train_1'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])])
                 top_list.append(graph_str)
-                num_new_found += 1
 
     return num_new_found, found_arch_list_set
 
@@ -497,7 +500,6 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
     num_new_found, top_arch_list_set = get_new_archs_and_add_to_dataset(dataset_name, datasets, top_k,
                                                                         repeat, top_list, found_arch_list_set, visited,
                                                                         top_acc_list, top_test_acc_list)
-    del found_arch_list_set
     '''
     if num_new_found == 0:
         logger.info('No new architecture found, filter the found_arch_list_set')
@@ -601,13 +603,14 @@ def prepare_model(num_nvp, nvp_config, latent_dim, num_layers, d_model, num_head
 
 
 def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_budget):
-    logdir, logger = get_logdir_and_logger(os.path.join(f'{train_sample_amount}_{valid_sample_amount}_{query_budget}',
+    top_k = 1
+    logdir, logger = get_logdir_and_logger(os.path.join(f'{train_sample_amount}_{valid_sample_amount}_{query_budget}_top{top_k}',
                                                         dataset_name), f'trainGAE_ensemble_{seed}.log')
     random_seed = seed
     tf.random.set_seed(random_seed)
     random.seed(random_seed)
 
-    top_k = 1
+
 
     is_only_validation_data = True
     train_phase = [0, 1]  # 0 not train, 1 train
@@ -700,7 +703,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     model.encoder.set_weights(pretrained_model.encoder.get_weights())
     model.decoder.set_weights(pretrained_model.decoder.get_weights())
     retrain_model.set_weights(model.get_weights())
-    retrain_model.get_weights_to_self_ckpt()
+    #retrain_model.get_weights_to_self_ckpt()
 
     global_top_acc_list = []
     global_top_test_acc_list = []
@@ -719,8 +722,12 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         datasets['valid_1'] = mask_graph_dataset(datasets['valid'], valid_sample_amount, 1, random_seed=random_seed)
         datasets['train_1'].filter(lambda g: not np.isnan(g.y))
         datasets['valid_1'].filter(lambda g: not np.isnan(g.y))
+
         # Add initial data to records
         acc_list = query_tabular(dataset_name, datasets['train_1'])
+        global_top_acc_list.extend([i['valid-accuracy'] for i in acc_list])
+        global_top_test_acc_list.extend([i['test-accuracy'] for i in acc_list])
+        acc_list = query_tabular(dataset_name, datasets['valid_1'])
         global_top_acc_list.extend([i['valid-accuracy'] for i in acc_list])
         global_top_test_acc_list.extend([i['test-accuracy'] for i in acc_list])
 
@@ -754,12 +761,16 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
                                                                                     batch_size,
                                                                                     retrain_epochs, logdir, top_list,
                                                                                     repeat_label, top_k)
-            now_queried += num_new_found
-            if now_queried > query_budget:
-                break
+
             global_top_acc_list += top_acc_list
             global_top_test_acc_list += top_test_acc_list
             global_top_arch_list += top_arch_list
+            now_queried += num_new_found
+            if now_queried > query_budget:
+                global_top_test_acc_list = global_top_test_acc_list[: query_budget]
+                global_top_acc_list = global_top_acc_list[: query_budget]
+                global_top_arch_list = global_top_arch_list[: query_budget]
+                break
             run += 1
 
             if len(top_acc_list) != 0 and max(top_acc_list) > history_top:
