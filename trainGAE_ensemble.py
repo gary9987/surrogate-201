@@ -1,4 +1,5 @@
 import argparse
+import pickle
 import random
 from typing import List, Union
 import numpy as np
@@ -637,7 +638,13 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         num_ops = len(OP_PRIMITIVES_NB101)  # 5
         num_nodes = 7
         num_adjs = num_nodes ** 2
-        datasets = train_valid_test_split_dataset(NasBench101Dataset(start=0, end=423623),
+        if os.path.exists('datasets/NasBench101Dataset.cache'):
+            datasets = pickle.load(open('datasets/NasBench101Dataset.cache', 'rb'))
+        else:
+            datasets = NasBench101Dataset(start=0, end=423623)
+            with open('datasets/NasBench101Dataset.cache', 'wb') as f:
+                pickle.dump(datasets, f)
+        datasets = train_valid_test_split_dataset(datasets,
                                                   ratio=[0.8, 0.1, 0.1],
                                                   shuffle=True,
                                                   shuffle_seed=random_seed)
