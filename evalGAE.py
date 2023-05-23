@@ -25,9 +25,9 @@ nb101_dataset = NasBench101Dataset(end=0)
 def inverse_from_acc(model: tf.keras.Model, num_sample_z: int, x_dim: int, z_dim: int, to_inv_acc, version=2):
     batch_size = int(tf.shape(to_inv_acc)[0])
     y = tf.repeat(to_inv_acc, num_sample_z, axis=0)  # (batch_size * num_sample_z, 1)
-    z = np.random.multivariate_normal([0.] * z_dim, np.eye(z_dim),
-                                      size=batch_size * num_sample_z)  # (num_sample_z, z_dim)
-    y = np.concatenate([z, y], axis=-1).astype(np.float32)  # (num_sample_z, z_dim + 1)
+    #z = np.random.multivariate_normal([0.] * z_dim, np.eye(z_dim),
+    #                                  size=batch_size * num_sample_z)  # (num_sample_z, z_dim)
+    y = tf.concat([tf.random.normal((batch_size * num_sample_z, z_dim)), y], axis=-1)  # (num_sample_z, z_dim + 1)
 
     rev_latent = model.inverse(y)  # (num_sample_z, latent_dim)
     if version == 1:
@@ -83,6 +83,7 @@ def query_acc_by_ops(ops: Union[list, np.ndarray], dataset_name, is_random=False
         acc = data['accuracy'] / 100
     else:
         raise ValueError('on should be valid-accuracy or test-accuracy')
+    del meta_info
     return acc
 
 
@@ -99,10 +100,8 @@ def eval_query_best(model: tf.keras.Model, dataset_name, x_dim: int, z_dim: int,
     for ops_idx, adj, query_acc in zip(ops_idx_lis, adj_list, to_inv[:, -1]):
         try:
             if dataset_name != 'nb101':
-                if np.array_equal(adj, ADJACENCY):
-                    acc = query_acc_by_ops(ops_idx, dataset_name, is_random=False)
-                else:
-                    continue
+                assert np.array_equal(adj, ADJACENCY)
+                acc = query_acc_by_ops(ops_idx, dataset_name, is_random=False)
             else:
                 adj_for_spec, ops_idx_for_spec = mask_padding_vertex_for_spec(adj, ops_idx)
                 acc = nb101_dataset.get_metrics(adj_for_spec, ops_idx_for_spec)[1]
@@ -122,13 +121,14 @@ def eval_query_best(model: tf.keras.Model, dataset_name, x_dim: int, z_dim: int,
         except:
             print('invalid')
             invalid += 1
-
+    '''
     fig, ax = plt.subplots()
     ax.axline((0, 0), slope=1, linewidth=0.2, color='black')
     plt.scatter(x, y, s=[1] * len(x))
     plt.xlim(0.85, 1.2)
     plt.ylim(0.85, 1.2)
     plt.savefig('top.png')
+    '''
     to_inv = None
     if len(y) == 0:
         return invalid, 0, 0, found_arch_list
@@ -139,9 +139,8 @@ def eval_query_best(model: tf.keras.Model, dataset_name, x_dim: int, z_dim: int,
 def ensemble_inverse_from_acc(model: tf.keras.Model, num_sample_z: int, x_dim: int, z_dim: int, to_inv_acc, noise_std=0., version=2):
     batch_size = int(tf.shape(to_inv_acc)[0])
     y = tf.repeat(to_inv_acc, num_sample_z, axis=0)  # (batch_size * num_sample_z, 1)
-    z = np.random.multivariate_normal([0.] * z_dim, np.eye(z_dim),
-                                      size=batch_size * num_sample_z)  # (num_sample_z, z_dim)
-    y = np.concatenate([z, y], axis=-1).astype(np.float32)  # (num_sample_z, z_dim + 1)
+    # z (batch_size * num_sample_z, z_dim)
+    y = tf.concat([tf.random.normal((batch_size * num_sample_z, z_dim)), y], axis=-1)  # (num_sample_z, z_dim + 1)
 
     rev_latent = model.inverse(y)  # (num_sample_z, num_nvp, latent_dim)
     if version == 1:
@@ -152,7 +151,7 @@ def ensemble_inverse_from_acc(model: tf.keras.Model, num_sample_z: int, x_dim: i
     else:
         raise ValueError('version')
 
-    _, adj, ops_cls, adj_cls = model.decode(rev_latent + tf.random.normal(tf.shape(rev_latent), 0., noise_std))  # (batch_size, num_sample_z, 8, 8), (batch_size, num_sample_z, 8, 7)
+    _, adj, ops_cls, adj_cls = model.decode(rev_latent + tf.random.normal(tf.shape(rev_latent), stddev=noise_std))  # (batch_size, num_sample_z, 8, 8), (batch_size, num_sample_z, 8, 7)
     ops_cls = tf.reshape(ops_cls, (batch_size * model.num_nvp, num_sample_z, -1, model.num_ops))  # (batch_size, num_sample_z, 8, 7)
     ops_vote = tf.reduce_sum(ops_cls, axis=1).numpy()  # (batch_size, 1, 8 * 7)
 

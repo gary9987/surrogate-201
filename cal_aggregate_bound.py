@@ -1,3 +1,4 @@
+import os
 import pickle
 from math import sqrt, exp, log
 from models.GNN import GraphAutoencoderEnsembleNVP, GraphAutoencoderNVP, GraphAutoencoder
@@ -20,6 +21,20 @@ def after_theta_mse(dataset, model, theta):
             pred_y += float(y_out[0][i][-1]) * theta[i]
         mse += (pred_y - y) ** 2 / n
     return mse
+
+
+def individual_mse(dataset, model):
+    num_nvp = len(model.nvp_list)
+    mse_list = [0] * num_nvp
+    n = len(dataset)
+    for idx, data in enumerate(dataset):
+        y = data.y[-1]
+        xa = (tf.constant([data.x]), to_undiredted_adj(tf.constant([data.a])))
+        ops_cls, adj_cls, kl_loss, y_out, x_encoding = model(xa, training=False)
+        for i in range(num_nvp):
+            mse_list[i] += (float(y_out[0][i][-1]) - y) ** 2 / n
+
+    return mse_list
 
 
 def get_min_loss_nvp_idx(dataset, model, pred_y_list):
@@ -81,7 +96,7 @@ def get_bound(dataset, model):
     return first_term + rem_term
 
 
-def get_theta_list(model, dataset, beta=1. + 1e-16):
+def get_theta_list(model, dataset, beta=1. + 1e-15):
     num_nvp = len(model.nvp_list)
     n = len(dataset)
     theta_list = [tf.constant([1. / num_nvp] * num_nvp)]
@@ -121,8 +136,49 @@ def get_theta_list(model, dataset, beta=1. + 1e-16):
     return theta_list
 
 
+def get_theta(model, dataset, beta=1. + 1e-15):
+    num_nvp = len(model.nvp_list)
+    n = len(dataset)
+    theta = 0
+
+    x = tf.stack([tf.constant(i.x, dtype=tf.float32) for i in dataset])
+    a = tf.stack([tf.constant(i.a, dtype=tf.float32) for i in dataset])
+    a = to_undiredted_adj(a)
+    _, _, _, regs, _ = model((x, a), training=False)
+    # regs: (n, num_nvp, z_dim+y_dim)
+
+    loss_cache = np.zeros((n, num_nvp)).astype(np.float32)
+    loss_cache2 = []
+    for i in range(n):
+        under_q = 0
+        for k in range(num_nvp):
+            loss = 0.
+            for m in range(i + 1):
+                if m == i:
+                    loss_cache[m][k] = tf.keras.losses.mean_squared_error(dataset[m].y, regs[m][k][-1])
+                loss += loss_cache[m][k]
+
+            under_q += tf.cast(tf.exp(-(beta ** -1) * loss), tf.float32)
+
+        upper_q = 0
+        for m in range(i + 1):
+            if m == i:
+                y = dataset[m].y
+                y = tf.expand_dims(y, axis=0)
+                y = tf.expand_dims(y, axis=0)
+                y = tf.repeat(y, num_nvp, axis=1)
+                loss_cache2.append(tf.keras.losses.mean_squared_error(y, regs[m][:, -1:]))
+            upper_q += loss_cache2[m]
+
+        upper_q = tf.exp(-(beta ** -1) * upper_q)
+        theta += (upper_q / under_q) / n
+
+    return tf.squeeze(theta)
+
+
 if __name__ == '__main__':
-    logdir = 'logs/cifar10-valid/aggregate50'
+    os.environ['CUDA_VISIBLE_DEVICES'] = ''
+    logdir = 'logs/aggregate50_10'
     logging.basicConfig(filename=f'{logdir}/cal_upper_bound.log', level=logging.INFO)
 
     with open(f'{logdir}/model.pkl', 'rb') as f:
@@ -139,7 +195,18 @@ if __name__ == '__main__':
         expected_mse += after_theta_mse(datasets['train_1'][:i], model, theta_list[i-1]) / len(datasets['train_1'])
 
     logging.info(f'expected mse {expected_mse}')
+    # 4.533987521426752e-05
+    # 4.537969289231114e-05
 
+    mse_list = individual_mse(datasets['train_1'], model)
+    logging.info(f'individual mse {mse_list}')
+    logging.info(f'individual mse min {np.min(mse_list)}')
+
+    theta = get_theta(model, datasets['train_1'])
+    print(theta)
+    print(after_theta_mse(datasets['valid_1'], model, theta))
+    # 0.0035248573
+    # 0.0035256199
     '''
     bound = get_bound(datasets['train_1'], model)
 

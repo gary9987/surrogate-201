@@ -410,12 +410,13 @@ def sample_arch_candidates(model, dataset_name, x_dim, z_dim, visited, sample_am
     max_retry = 10
     std_idx = 0
     noise_std_list = [0.0, 1e-5, 5e-5, 1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 0.1]
+    amount_scale_list = [1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.2, 2.4, 2.8, 3.0]
     while len(found_arch_list_set) < sample_amount and std_idx < max_retry:
         retry = 0
         while len(found_arch_list_set) < sample_amount and retry < max_retry:
             _, _, _, found_arch_list = ensemble_eval_query_best(model, dataset_name, x_dim, z_dim,
                                                                 noise_scale=noise_std_list[std_idx],
-                                                                query_amount=sample_amount // model.num_nvp)
+                                                                query_amount=int(sample_amount * amount_scale_list[std_idx]) // model.num_nvp)
             if dataset_name == 'nb101':
                 found_arch_list = list(map(mask_for_model, found_arch_list))
                 found_arch_list = list(filter(lambda arch: arch is not None and arch['x'] is not None, found_arch_list))
@@ -531,9 +532,8 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
                 validation_steps=loader['valid'].steps_per_epoch
                 )
 
-    results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
-    logger.info(str(dict(zip(trainer.metrics_names, results))))
-
+    #results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
+    #logger.info(str(dict(zip(trainer.metrics_names, results))))
     return top_acc_list, top_test_acc_list, top_arch_list_set, num_new_found
 
 
@@ -702,7 +702,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     # Load AE weights from pretrained model
     model.encoder.set_weights(pretrained_model.encoder.get_weights())
     model.decoder.set_weights(pretrained_model.decoder.get_weights())
-    retrain_model.set_weights(model.get_weights())
+    #retrain_model.set_weights(model.get_weights())
     #retrain_model.get_weights_to_self_ckpt()
 
     global_top_acc_list = []
@@ -743,12 +743,13 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
                      ]
         trainer = train(2, model, loader, train_epochs, logdir, callbacks,
                         x_dim=x_dim, y_dim=y_dim, z_dim=z_dim, finetune=finetune, learning_rate=1e-3, no_valid=False)
-        results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
-        logger.info(str(dict(zip(trainer.metrics_names, results))))
+        #results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
+        #logger.info(str(dict(zip(trainer.metrics_names, results))))
 
         # Recreate Trainer for retrain
-        retrain_model.set_weights(model.get_weights())
-        trainer = Trainer2(retrain_model, x_dim, y_dim, z_dim, finetune=retrain_finetune, is_rank_weight=False)
+        #retrain_model.set_weights(model.get_weights())
+        #del model
+        trainer = Trainer2(model, x_dim, y_dim, z_dim, finetune=retrain_finetune, is_rank_weight=False)
         trainer.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3), run_eagerly=False)
 
         top_list = []
