@@ -93,9 +93,11 @@ def mask_padding_vertex_for_model(a, x):
         output_idx = ops.index(0)
         for i in range(output_idx+1, x.shape[0]):
             x[i] = np.zeros(x.shape[1])
+        new_a = np.zeros(a.shape)
+        new_a[:output_idx, :output_idx+1] = a[:output_idx, :output_idx+1]
     except:
         return None, None
-    return a, x
+    return new_a, x
 
 
 def mask_padding_vertex_for_spec(a, x):

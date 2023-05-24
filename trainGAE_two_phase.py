@@ -12,7 +12,7 @@ import os
 from datasets.nb201_dataset import NasBench201Dataset, OP_PRIMITIVES_NB201
 from datasets.nb101_dataset import NasBench101Dataset, OP_PRIMITIVES_NB101, mask_padding_vertex_for_spec, mask_padding_vertex_for_model
 from datasets.utils import train_valid_test_split_dataset, mask_graph_dataset, arch_list_to_set, graph_to_str
-from spektral.data import BatchLoader
+from spektral.data import PackedBatchLoader
 from evalGAE import eval_query_best, query_acc_by_ops
 from utils.py_utils import get_logdir_and_logger
 from spektral.data import Graph
@@ -307,9 +307,9 @@ def to_loader(datasets, batch_size: int, epochs: int):
     loader = {}
     for key, value in datasets.items():
         if key == 'train' or key == 'valid':
-            loader[key] = BatchLoader(value, batch_size=batch_size, shuffle=True, epochs=epochs * 2)
+            loader[key] = PackedBatchLoader(value, batch_size=batch_size, shuffle=True, epochs=epochs * 2)
         elif key == 'test':
-            loader[key] = BatchLoader(value, batch_size=batch_size, shuffle=False, epochs=1)
+            loader[key] = PackedBatchLoader(value, batch_size=batch_size, shuffle=False, epochs=1)
 
     return loader
 

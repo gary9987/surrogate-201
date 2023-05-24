@@ -6,6 +6,7 @@ import numpy as np
 import tensorflow as tf
 from utils.tf_utils import to_undiredted_adj
 import logging
+from spektral.data.loaders import PackedBatchLoader
 
 
 def after_theta_mse(dataset, model, theta):
@@ -23,7 +24,7 @@ def after_theta_mse(dataset, model, theta):
     return mse
 
 
-def individual_mse(dataset, model):
+def individual_mse(model, dataset):
     num_nvp = len(model.nvp_list)
     mse_list = [0] * num_nvp
     n = len(dataset)
@@ -140,9 +141,8 @@ def get_theta(model, dataset, beta=1. + 1e-15):
     num_nvp = len(model.nvp_list)
     n = len(dataset)
     theta = 0
-
-    x = tf.stack([tf.constant(i.x, dtype=tf.float32) for i in dataset])
-    a = tf.stack([tf.constant(i.a, dtype=tf.float32) for i in dataset])
+    loader = PackedBatchLoader(dataset, batch_size=len(dataset), epochs=1, shuffle=False)
+    (x, a), _ = next(loader.load())
     a = to_undiredted_adj(a)
     _, _, _, regs, _ = model((x, a), training=False)
     # regs: (n, num_nvp, z_dim+y_dim)
@@ -176,6 +176,20 @@ def get_theta(model, dataset, beta=1. + 1e-15):
     return tf.squeeze(theta)
 
 
+def expected_mse(model, dataset):
+    expected_mse = 0
+    theta_list = get_theta_list(model, dataset)
+    for i in range(1, len(dataset) + 1):
+        expected_mse += after_theta_mse(dataset[:i], model, theta_list[i-1]) / len(dataset)
+
+    return expected_mse
+
+
+def min_mse_over_M(model, dataset):
+    mse_list = individual_mse(dataset, model)
+    return min(mse_list)
+
+
 if __name__ == '__main__':
     os.environ['CUDA_VISIBLE_DEVICES'] = ''
     logdir = 'logs/aggregate50_10'
@@ -189,22 +203,18 @@ if __name__ == '__main__':
     #    theta = pickle.load(f)
 
     # Calculate paper: learning by mirror average formula (5.5) left term
-    expected_mse = 0
-    theta_list = get_theta_list(model, datasets['train_1'])
-    for i in range(1, len(datasets['train_1']) + 1):
-        expected_mse += after_theta_mse(datasets['train_1'][:i], model, theta_list[i-1]) / len(datasets['train_1'])
-
+    expected_mse = expected_mse(model, datasets['train_1'])
     logging.info(f'expected mse {expected_mse}')
     # 4.533987521426752e-05
     # 4.537969289231114e-05
 
-    mse_list = individual_mse(datasets['train_1'], model)
+    mse_list = individual_mse(model, datasets['train_1'])
     logging.info(f'individual mse {mse_list}')
     logging.info(f'individual mse min {np.min(mse_list)}')
 
     theta = get_theta(model, datasets['train_1'])
     print(theta)
-    print(after_theta_mse(datasets['valid_1'], model, theta))
+    print(after_theta_mse(datasets['train_1'], model, theta))
     # 0.0035248573
     # 0.0035256199
     '''

@@ -18,7 +18,7 @@ from datasets.utils import train_valid_test_split_dataset, mask_graph_dataset, a
 from evalGAE import query_acc_by_ops, ensemble_eval_query_best, nb101_dataset
 from trainGAE_two_phase import to_loader, mask_for_model, mask_for_spec
 from utils.py_utils import get_logdir_and_logger
-from spektral.data import Graph
+from spektral.data import Graph, PackedBatchLoader
 from utils.tf_utils import to_undiredted_adj
 import logging
 
@@ -483,11 +483,7 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
         found_arch_list_set = sample_arch_candidates(trainer.model, dataset_name, trainer.x_dim, trainer.z_dim, visited,
                                                      sample_amount=200)
     '''
-
-    if dataset_name == 'nb101':
-        theta = get_theta(trainer.model, list(map(pad_nb101_graph, datasets['train_1'])))
-    else:
-        theta = get_theta(trainer.model, datasets['train_1'])
+    theta = get_theta(trainer.model, datasets['train_1'])
 
     logger.info(f'Theta: {theta.numpy().tolist()}')
 
@@ -543,8 +539,8 @@ def get_theta(model, dataset, beta=1.):
     n = len(dataset)
     theta = 0
 
-    x = tf.stack([tf.constant(i.x, dtype=tf.float32) for i in dataset])
-    a = tf.stack([tf.constant(i.a, dtype=tf.float32) for i in dataset])
+    loader = PackedBatchLoader(dataset, batch_size=len(dataset), epochs=1, shuffle=False)
+    (x, a), _ = next(loader.load())
     a = to_undiredted_adj(a)
     _, _, _, regs, _ = model((x, a), training=False)
     # regs: (n, num_nvp, z_dim+y_dim)
