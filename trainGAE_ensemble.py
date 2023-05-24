@@ -15,7 +15,7 @@ import os
 from datasets.nb201_dataset import NasBench201Dataset, OP_PRIMITIVES_NB201
 from datasets.utils import train_valid_test_split_dataset, mask_graph_dataset, arch_list_to_set, graph_to_str, \
     repeat_graph_dataset_element
-from evalGAE import query_acc_by_ops, ensemble_eval_query_best, nb101_dataset
+from evalGAE import query_acc_by_ops, eval_query_best, nb101_dataset, query_tabular
 from trainGAE_two_phase import to_loader, mask_for_model, mask_for_spec
 from utils.py_utils import get_logdir_and_logger
 from spektral.data import Graph, PackedBatchLoader
@@ -326,25 +326,6 @@ def train(phase: int, model, loader, train_epochs, logdir, callbacks=None, x_dim
     return trainer
 
 
-def query_tabular(dataset_name: str, archs: Union[List, spektral.data.Dataset]):
-    if isinstance(archs, spektral.data.Dataset):
-        archs = [{'a': graph.a, 'x': graph.x} for graph in archs]
-
-    acc_list = []
-    for idx, i in enumerate(archs):
-        if dataset_name != 'nb101':
-            acc = query_acc_by_ops(i['x'], dataset_name)
-            test_acc = query_acc_by_ops(i['x'], dataset_name, on='test-accuracy')
-        else:
-            i = mask_for_spec(i)
-            metrics = nb101_dataset.get_metrics(i['a'], np.argmax(i['x'], axis=-1))
-            acc = float(metrics[1])
-            test_acc = float(metrics[2])
-        acc_list.append({'valid-accuracy': acc, 'test-accuracy': test_acc})
-
-    return acc_list
-
-
 def get_new_archs_and_add_to_dataset(dataset_name, datasets, top_k, repeat, top_list,
                                      found_arch_list_set, visited, top_acc_list, top_test_acc_list):
     """
@@ -415,9 +396,9 @@ def sample_arch_candidates(model, dataset_name, x_dim, z_dim, visited, sample_am
     while len(found_arch_list_set) < sample_amount and std_idx < max_retry:
         retry = 0
         while len(found_arch_list_set) < sample_amount and retry < max_retry:
-            _, _, _, found_arch_list = ensemble_eval_query_best(model, dataset_name, x_dim, z_dim,
-                                                                noise_scale=noise_std_list[std_idx],
-                                                                query_amount=int(sample_amount * amount_scale_list[std_idx]) // model.num_nvp)
+            _, _, _, found_arch_list = eval_query_best(model, dataset_name, x_dim, z_dim,
+                                                       noise_scale=noise_std_list[std_idx],
+                                                       query_amount=int(sample_amount * amount_scale_list[std_idx]) // model.num_nvp)
             if dataset_name == 'nb101':
                 found_arch_list = list(map(mask_for_model, found_arch_list))
                 found_arch_list = list(filter(lambda arch: arch is not None and arch['x'] is not None, found_arch_list))
