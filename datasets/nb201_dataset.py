@@ -1,11 +1,12 @@
 from pathlib import Path
-from typing import Union
 import spektral.data
 import wget
+from nats_bench import create
 from spektral.data import Dataset, Graph
 import pickle
 import numpy as np
 import os
+from tqdm import tqdm
 
 
 # Useful constants
@@ -32,6 +33,19 @@ ADJACENCY = np.array([[0, 1, 1, 0, 1, 0, 0, 0],
                     [0, 0, 0, 0, 0, 0, 0, 0]])
 
 
+def ops_list_to_nb201_arch_str(ops):
+    # partial code from: https://github.com/jovitalukasik/SVGe/blob/main/datasets/NASBench201.py#L239
+    steps_coding = ['0', '0', '1', '0', '1', '2']
+
+    node_1 = '|' + ops[1] + '~' + steps_coding[0] + '|'
+    node_2 = '|' + ops[2] + '~' + steps_coding[1] + '|' + ops[3] + '~' + steps_coding[2] + '|'
+    node_3 = '|' + ops[4] + '~' + steps_coding[3] + '|' + ops[5] + '~' + steps_coding[4] + '|' + ops[
+        6] + '~' + steps_coding[5] + '|'
+    nodes_nb201 = node_1 + '+' + node_2 + '+' + node_3
+
+    return nodes_nb201
+
+
 def convert_matrix_ops_to_graph(matrix, ops):
     features_dict = {'output': 0, 'input': 1, 'nor_conv_1x1': 2, 'nor_conv_3x3': 3, 'avg_pool_3x3': 4,
                      'skip_connect': 5, 'none': 6}
@@ -50,12 +64,25 @@ def convert_matrix_ops_to_graph(matrix, ops):
     return spektral.data.Graph(x=x, a=a)
 
 
+def idx_to_metric(idx, dataset, nb201api):
+    meta_info = nb201api.query_meta_info_by_index(idx, hp='200')
+    data = meta_info.get_metrics(dataset, 'train', iepoch=None, is_random=False)
+    train_acc = data['accuracy'] / 100
+    data = meta_info.get_metrics(dataset, 'x-valid', iepoch=None, is_random=False)
+    val_acc = data['accuracy'] / 100
+    if dataset == 'cifar10-valid':
+        data = meta_info.get_metrics('cifar10', 'ori-test', iepoch=None, is_random=False)
+    else:
+        data = meta_info.get_metrics(dataset, 'x-test', iepoch=None, is_random=False)
+    test_acc = data['accuracy'] / 100
+    return  np.array([[train_acc], [val_acc], [test_acc]], dtype=np.float32)
+
+
 def transform_nb201_to_graph(records: dict, hp: str, seed: int, dataset: str):
     file_path = f'../NasBench201Dataset/{dataset}/NasBench201Dataset_hp{hp}_seed{seed}'
     Path(file_path).mkdir(exist_ok=True, parents=True)
 
     for record, no in zip(records, range(len(records))):
-
         matrix, ops, metrics = np.array(record[0]), record[1], record[2]
 
         # Labels Y
@@ -78,10 +105,31 @@ def transform_nb201_to_graph(records: dict, hp: str, seed: int, dataset: str):
         filename = os.path.join(file_path, f'graph_{no}.npz')
         np.savez(filename, a=graph.a, x=graph.x, y=y)
         print(f'graph_{no}.npz is saved.')
-        
+
+
+def generate_nb201_hash_to_metrics():
+    file_path = '../NasBench201Dataset'
+    api = create(None, 'tss', fast_mode=True, verbose=False)
+    map_hash_to_metrics = {}
+    for idx in tqdm(range(len(api))):
+        arch_meta_info = api.query_meta_info_by_index(idx, hp='200')
+        map_hash_to_metrics[arch_meta_info.arch_str] = {dataset: idx_to_metric(idx, dataset, api) for dataset in ['cifar10-valid', 'cifar100', 'ImageNet16-120']}
+
+    with open(os.path.join(file_path, 'nb201_hash_to_metrics.pkl'), 'wb') as f:
+        pickle.dump(map_hash_to_metrics, f)
+
+
+def remove_last_subfolders(path):
+    path = Path(path)
+    parent_dir = path.parent
+    folders = list(parent_dir.parts)
+    new_folders = folders[:-1]
+    new_path = Path(*new_folders)
+    return str(new_path)
+
 
 class NasBench201Dataset(Dataset):
-    def __init__(self, start: int, end: int, hp: str, seed: Union[int, bool], dataset='cifar10-valid', root='', **kwargs):
+    def __init__(self, start=0, end=15624, hp='200', seed=False, dataset='cifar10-valid', root='', **kwargs):
         """
         :param start:
         :param end:
@@ -94,6 +142,7 @@ class NasBench201Dataset(Dataset):
         self.file_path = os.path.join(root, 'NasBench201Dataset', dataset, f'NasBench201Dataset_hp{hp}_seed{seed}')
         self.start = start
         self.end = end
+        self.hash_to_metrics = None
         super().__init__(**kwargs)
 
     def download(self):
@@ -107,6 +156,9 @@ class NasBench201Dataset(Dataset):
 
 
     def read(self):
+        with open(os.path.join(remove_last_subfolders(self.file_path), 'nb201_hash_to_metrics.pkl'), 'rb') as f:
+            self.hash_to_metrics = pickle.load(f)
+
         output = []
         filename_list = []
 
@@ -128,7 +180,7 @@ class NasBench201Dataset(Dataset):
 if __name__ == '__main__':
     hp = '200' # hp = 12 or 200
     datasets = ['cifar10-valid', 'cifar100', 'ImageNet16-120'] # cifar10-valid or cifar100 or ImageNet16-120
-
+    generate_nb201_hash_to_metrics()
     for dataset in datasets:
         if hp == '12':
             seed_list = [111, 777]

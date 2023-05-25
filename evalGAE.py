@@ -1,13 +1,12 @@
-import copy
 from typing import Union, List
 import numpy as np
 import spektral
 import tensorflow as tf
 from datasets.nb101_dataset import NasBench101Dataset, mask_padding_vertex_for_spec, mask_padding_vertex_for_model, \
     mask_for_spec
-from datasets.nb201_dataset import NasBench201Dataset, OPS_by_IDX_201, ADJACENCY
-from datasets.transformation import OnlyValidAccTransform, ReshapeYTransform, OnlyFinalAcc, LabelScale
-from datasets.utils import train_valid_test_split_dataset, ops_list_to_nb201_arch_str
+from datasets.nb201_dataset import NasBench201Dataset, OPS_by_IDX_201, ADJACENCY, ops_list_to_nb201_arch_str
+from datasets.transformation import OnlyValidAccTransform, OnlyFinalAcc, LabelScale
+from datasets.utils import train_valid_test_split_dataset
 from models.GNN import GraphAutoencoderNVP
 from nats_bench import create
 import matplotlib.pyplot as plt
@@ -18,6 +17,7 @@ from utils.tf_utils import to_undiredted_adj
 
 nb201api = create(None, 'tss', fast_mode=True, verbose=False)
 nb101_dataset = NasBench101Dataset(end=0)
+nb201_dataset = NasBench201Dataset(end=0)
 
 
 def query_acc_by_ops(ops: Union[list, np.ndarray], dataset_name, is_random=False, on='valid-accuracy') -> float:
@@ -35,22 +35,22 @@ def query_acc_by_ops(ops: Union[list, np.ndarray], dataset_name, is_random=False
     ops = [OPS_by_IDX_201[i] for i in ops_idx]
     assert ops[0] == 'input' and ops[-1] == 'output'
     arch_str = ops_list_to_nb201_arch_str(ops)
-    idx = nb201api.query_index_by_arch(arch_str)
-    meta_info = nb201api.query_meta_info_by_index(idx, hp='200')
 
     if on == 'valid-accuracy':
-        data = meta_info.get_metrics(dataset_name, 'x-valid', iepoch=None, is_random=is_random)
-        acc = data['accuracy'] / 100
+        acc = nb201_dataset.hash_to_metrics[arch_str][dataset_name][1]
     elif on == 'test-accuracy':
+        '''
         if dataset_name == 'cifar10-valid':
             data = meta_info.get_metrics('cifar10', 'ori-test', iepoch=None, is_random=is_random)
         else:
             data = meta_info.get_metrics(dataset_name, 'x-test', iepoch=None, is_random=is_random)
         acc = data['accuracy'] / 100
+        '''
+        acc = nb201_dataset.hash_to_metrics[arch_str][dataset_name][2]
     else:
         raise ValueError('on should be valid-accuracy or test-accuracy')
-    del meta_info
-    return acc
+
+    return float(acc)
 
 
 '''
