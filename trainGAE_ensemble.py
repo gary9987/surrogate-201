@@ -582,7 +582,7 @@ def prepare_model(num_nvp, nvp_config, latent_dim, num_layers, d_model, num_head
 
 def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_budget):
     top_k = 1
-    logdir, logger = get_logdir_and_logger(os.path.join(f'{train_sample_amount}_{valid_sample_amount}_{query_budget}_top{top_k}',
+    logdir, logger = get_logdir_and_logger(os.path.join(f'{train_sample_amount}_{valid_sample_amount}_{query_budget}_top{top_k}_ensemble',
                                                         dataset_name), f'trainGAE_ensemble_{seed}.log')
     random_seed = seed
     tf.random.set_seed(random_seed)
@@ -696,6 +696,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     patience_cot = 0
     find_optimal_query = 0
     find_optimal = False
+    record_top = {'valid': [], 'test': []}
 
     if train_phase[1]:
         batch_size = 64
@@ -757,6 +758,8 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
                 global_top_arch_list = global_top_arch_list[: query_budget]
                 break
             run += 1
+            record_top['valid'].append({now_queried: sorted(global_top_acc_list, reverse=True)[:5]})
+            record_top['test'].append({now_queried: sorted(global_top_test_acc_list, reverse=True)[:5]})
 
             if len(top_acc_list) != 0 and max(top_acc_list) > history_top:
                 history_top = max(top_acc_list)
@@ -780,13 +783,10 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
 
     logger.info('Final result')
     logger.info(f'Find optimal query amount {find_optimal_query}')
-    logger.info(f'Avg found acc {sum(global_top_acc_list) / len(global_top_acc_list)}')
     logger.info(f'Best found acc {max(global_top_acc_list)}')
-    logger.info(f'Avg test acc {sum(global_top_test_acc_list) / len(global_top_test_acc_list)}')
     logger.info(f'Best test acc {max(global_top_test_acc_list)}')
 
-    return sum(global_top_acc_list) / len(global_top_acc_list), max(global_top_acc_list), sum(
-        global_top_test_acc_list) / len(global_top_test_acc_list), max(global_top_test_acc_list)
+    return max(global_top_acc_list), max(global_top_test_acc_list), record_top
 
 
 if __name__ == '__main__':

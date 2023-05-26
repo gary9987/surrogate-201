@@ -12,7 +12,8 @@ import tensorflow as tf
 import os
 from datasets.nb201_dataset import NasBench201Dataset, OP_PRIMITIVES_NB201
 from datasets.nb101_dataset import NasBench101Dataset, OP_PRIMITIVES_NB101, mask_for_spec, mask_for_model
-from datasets.utils import train_valid_test_split_dataset, mask_graph_dataset, arch_list_to_set, graph_to_str
+from datasets.utils import train_valid_test_split_dataset, mask_graph_dataset, arch_list_to_set, graph_to_str, \
+    repeat_graph_dataset_element
 from spektral.data import PackedBatchLoader
 from evalGAE import eval_query_best, query_acc_by_ops, query_tabular
 from utils.py_utils import get_logdir_and_logger
@@ -25,7 +26,8 @@ def parse_args():
     parser.add_argument('--train_sample_amount', type=int, default=50, help='Number of samples to train (default: 50)')
     parser.add_argument('--valid_sample_amount', type=int, default=50, help='Number of samples to train (default: 50)')
     parser.add_argument('--query_budget', type=int, default=192)
-    parser.add_argument('--dataset', type=str, default='cifar10-valid', help='Could be nb101, cifar10-valid, cifar100, ImageNet16-120')
+    parser.add_argument('--dataset', type=str, default='cifar10-valid',
+                        help='Could be nb101, cifar10-valid, cifar100, ImageNet16-120')
     parser.add_argument('--seed', type=int, default=0)
     return parser.parse_args()
 
@@ -337,7 +339,7 @@ def sample_arch_candidates(model, dataset_name, x_dim, z_dim, visited, sample_am
             retry += 1
         std_idx += 1
 
-    #if retry == max_retry and len(found_arch_list_set) < sample_amount:
+    # if retry == max_retry and len(found_arch_list_set) < sample_amount:
     #    model.set_weights_from_self_ckpt()
     #    logging.getLogger(__name__).info('Reset model weights')
     #    return None
@@ -393,7 +395,6 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, l
     else:
         logger.info('Top acc list is [] in this run')
 
-
     # Add top found architecture to training dataset
     valid_visited = {graph_to_str(i): i.y.tolist() for i in datasets['valid'].graphs if not np.isnan(i.y).any()}
     for i in found_arch_list_set:
@@ -424,18 +425,20 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, l
                 steps_per_epoch=loader['train'].steps_per_epoch,
                 validation_steps=loader['valid'].steps_per_epoch)
 
-    #results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
-    #logger.info(str(dict(zip(trainer.metrics_names, results))))
+    # results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
+    # logger.info(str(dict(zip(trainer.metrics_names, results))))
 
     return top_acc_list, top_test_acc_list, found_arch_list_set, num_new_found
 
 
-def prepare_model(nvp_config, latent_dim, num_layers, d_model, num_heads, dff, num_ops, num_nodes, num_adjs, dropout_rate, eps_scale):
+def prepare_model(nvp_config, latent_dim, num_layers, d_model, num_heads, dff, num_ops, num_nodes, num_adjs,
+                  dropout_rate, eps_scale):
     pretrained_model = GraphAutoencoder(latent_dim=latent_dim, num_layers=num_layers,
                                         d_model=d_model, num_heads=num_heads,
                                         dff=dff, num_ops=num_ops, num_nodes=num_nodes,
                                         num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=eps_scale)
-    pretrained_model((tf.random.normal(shape=(1, num_nodes, num_ops)), tf.random.normal(shape=(1, num_nodes, num_nodes))))
+    pretrained_model(
+        (tf.random.normal(shape=(1, num_nodes, num_ops)), tf.random.normal(shape=(1, num_nodes, num_nodes))))
 
     model = GraphAutoencoderNVP(nvp_config=nvp_config, latent_dim=latent_dim, num_layers=num_layers,
                                 d_model=d_model, num_heads=num_heads,
@@ -560,12 +563,10 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     global_top_acc_list = []
     global_top_test_acc_list = []
     global_top_arch_list = []
+    record_top = {'valid': [], 'test': []}
 
     if train_phase[1]:
-        if finetune:
-            batch_size = 256
-        else:
-            batch_size = 64
+        batch_size = 64
         repeat_label = 20
         now_queried = train_sample_amount + valid_sample_amount
         logger.info('Train phase 2')
@@ -573,6 +574,9 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         datasets['valid_1'] = mask_graph_dataset(datasets['valid'], valid_sample_amount, 1, random_seed=random_seed)
         datasets['train_1'].filter(lambda g: not np.isnan(g.y))
         datasets['valid_1'].filter(lambda g: not np.isnan(g.y))
+        datasets['train'] = repeat_graph_dataset_element(datasets['train_1'], repeat_label)
+        datasets['valid'] = repeat_graph_dataset_element(datasets['valid_1'], repeat_label)
+
         # Add initial data to records
         acc_list = query_tabular(dataset_name, datasets['train_1'])
         global_top_acc_list.extend([i['valid-accuracy'] for i in acc_list])
@@ -581,32 +585,22 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         global_top_acc_list.extend([i['valid-accuracy'] for i in acc_list])
         global_top_test_acc_list.extend([i['test-accuracy'] for i in acc_list])
 
-        datasets['train'] = mask_graph_dataset(datasets['train'], train_sample_amount, repeat_label, random_seed=random_seed)
-        datasets['valid'] = mask_graph_dataset(datasets['valid'], valid_sample_amount, repeat_label, random_seed=random_seed)
-        if not finetune:
-            datasets['train'].filter(lambda g: not np.isnan(g.y))
-            datasets['valid'].filter(lambda g: not np.isnan(g.y))
-
         loader = to_loader(datasets, batch_size, train_epochs)
         callbacks = [CSVLogger(os.path.join(logdir, f"learning_curve_phase2.csv")),
-                     #tensorboard_callback,
+                     # tensorboard_callback,
                      tf.keras.callbacks.ReduceLROnPlateau(monitor='val_total_loss', factor=0.1, patience=patience // 2,
                                                           verbose=1, min_lr=1e-5),
                      EarlyStopping(monitor='val_total_loss', patience=patience, restore_best_weights=True)]
         trainer = train(2, model, loader, train_epochs, logdir, callbacks,
                         x_dim=x_dim, y_dim=y_dim, z_dim=z_dim, finetune=finetune)
-        #results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
-        #logger.info(str(dict(zip(trainer.metrics_names, results))))
+        # results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
+        # logger.info(str(dict(zip(trainer.metrics_names, results))))
 
         # Recreate Trainer for retrain
         retrain_model.set_weights(model.get_weights())
         trainer = Trainer2(retrain_model, x_dim, y_dim, z_dim, finetune=retrain_finetune, is_rank_weight=False)
         trainer.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3), run_eagerly=False)
-        '''
-        if not retrain_finetune:
-            datasets['train'].filter(lambda g: not np.isnan(g.y))
-            datasets['valid'].filter(lambda g: not np.isnan(g.y))
-        '''
+
         # Reset the lr for retrain
         run = 0
         while now_queried < query_budget and run <= 200:
@@ -617,12 +611,17 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
                                                                                     logger, repeat_label, top_k)
             now_queried += num_new_found
             logger.info('Now queried: ' + str(now_queried))
+
             if now_queried > query_budget:
                 break
+
             global_top_acc_list += top_acc_list
             global_top_test_acc_list += top_test_acc_list
             global_top_arch_list += top_arch_list
             run += 1
+
+            record_top['valid'].append({now_queried: sorted(global_top_acc_list, reverse=True)[:5]})
+            record_top['test'].append({now_queried: sorted(global_top_test_acc_list, reverse=True)[:5]})
 
             logger.info(f'History top 5 acc: {sorted(global_top_acc_list, reverse=True)[:5]}')
             logger.info(f'History top 5 test acc: {sorted(global_top_test_acc_list, reverse=True)[:5]}')
@@ -638,12 +637,9 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
 
     # invalid, avg_acc, best_acc, found_arch_list = eval_query_best(model, x_dim, z_dim, query_amount=10)
     logger.info('Final result')
-    logger.info(f'Avg found acc {sum(global_top_acc_list) / len(global_top_acc_list)}')
     logger.info(f'Best found acc {max(global_top_acc_list)}')
-    logger.info(f'Avg test acc {sum(global_top_test_acc_list) / len(global_top_test_acc_list)}')
     logger.info(f'Best test acc {max(global_top_test_acc_list)}')
-
-    return sum(global_top_acc_list) / len(global_top_acc_list), max(global_top_acc_list), sum(global_top_test_acc_list) / len(global_top_test_acc_list), max(global_top_test_acc_list)
+    return max(global_top_acc_list), max(global_top_test_acc_list), record_top
 
 
 if __name__ == '__main__':
