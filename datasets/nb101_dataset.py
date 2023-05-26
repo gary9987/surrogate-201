@@ -94,7 +94,7 @@ def mask_padding_vertex_for_model(a, x):
         for i in range(output_idx+1, x.shape[0]):
             x[i] = np.zeros(x.shape[1])
         new_a = np.zeros(a.shape)
-        new_a[:output_idx, :output_idx+1] = a[:output_idx, :output_idx+1]
+        new_a[:output_idx, :output_idx+1] = a[:output_idx, :output_idx+1]  # Set output node no connect to other nodes
     except:
         return None, None
     return new_a, x
@@ -115,6 +115,20 @@ def mask_padding_vertex_for_spec(a, x):
     new_x = x[:output_idx+1]
     new_a = a[:output_idx+1, :output_idx+1]
     return new_a, new_x
+
+
+def mask_for_model(arch):
+    new_arch = copy.deepcopy(arch)
+    new_arch['a'], new_arch['x'] = mask_padding_vertex_for_model(new_arch['a'], new_arch['x'])
+    if new_arch['a'] is None:
+        return None
+    return new_arch
+
+
+def mask_for_spec(arch):
+    new_arch = copy.deepcopy(arch)
+    new_arch['a'], new_arch['x'] = mask_padding_vertex_for_spec(new_arch['a'], new_arch['x'])
+    return new_arch
 
 
 def pad_nb101_graph(graph: spektral.data.Graph):

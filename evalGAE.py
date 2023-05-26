@@ -1,10 +1,12 @@
-from typing import Union
+from typing import Union, List
 import numpy as np
+import spektral
 import tensorflow as tf
-from datasets.nb101_dataset import NasBench101Dataset, mask_padding_vertex_for_spec, mask_padding_vertex_for_model
-from datasets.nb201_dataset import NasBench201Dataset, OPS_by_IDX_201, ADJACENCY
-from datasets.transformation import OnlyValidAccTransform, ReshapeYTransform, OnlyFinalAcc, LabelScale
-from datasets.utils import train_valid_test_split_dataset, ops_list_to_nb201_arch_str
+from datasets.nb101_dataset import NasBench101Dataset, mask_padding_vertex_for_spec, mask_padding_vertex_for_model, \
+    mask_for_spec
+from datasets.nb201_dataset import NasBench201Dataset, OPS_by_IDX_201, ADJACENCY, ops_list_to_nb201_arch_str
+from datasets.transformation import OnlyValidAccTransform, OnlyFinalAcc, LabelScale
+from datasets.utils import train_valid_test_split_dataset
 from models.GNN import GraphAutoencoderNVP
 from nats_bench import create
 import matplotlib.pyplot as plt
@@ -12,46 +14,10 @@ from spektral.data import BatchLoader
 import matplotlib as mpl
 from utils.tf_utils import to_undiredted_adj
 
-mpl.rcParams['figure.dpi'] = 300
-
-random_seed = 0
-np.random.seed(random_seed)
-tf.random.set_seed(random_seed)
 
 nb201api = create(None, 'tss', fast_mode=True, verbose=False)
 nb101_dataset = NasBench101Dataset(end=0)
-
-
-def inverse_from_acc(model: tf.keras.Model, num_sample_z: int, x_dim: int, z_dim: int, to_inv_acc, version=2):
-    batch_size = int(tf.shape(to_inv_acc)[0])
-    y = tf.repeat(to_inv_acc, num_sample_z, axis=0)  # (batch_size * num_sample_z, 1)
-    #z = np.random.multivariate_normal([0.] * z_dim, np.eye(z_dim),
-    #                                  size=batch_size * num_sample_z)  # (num_sample_z, z_dim)
-    y = tf.concat([tf.random.normal((batch_size * num_sample_z, z_dim)), y], axis=-1)  # (num_sample_z, z_dim + 1)
-
-    rev_latent = model.inverse(y)  # (num_sample_z, latent_dim)
-    if version == 1:
-        rev_latent = rev_latent[:, :x_dim]
-    elif version == 2:
-        rev_latent = tf.reshape(rev_latent, (batch_size, model.num_nodes, -1))  # (batch_size, num_sample_z, latent_dim)
-    else:
-        raise ValueError('version')
-
-    _, adj, ops_cls, adj_cls = model.decode(rev_latent)
-    ops_cls = tf.reshape(ops_cls, (batch_size, num_sample_z, -1, model.num_ops))  # (batch_size, num_sample_z, 8, 7)
-    ops_vote = tf.reduce_sum(ops_cls, axis=1).numpy()  # (batch_size, 1, 8 * 7)
-
-    adj = tf.reshape(adj, (batch_size, num_sample_z, model.num_nodes, model.num_nodes))  # (batch_size, num_sample_z, 8 * 8)
-    adj = tf.where(tf.reduce_mean(adj, axis=1) >= 0.5, x=1., y=0.).numpy()  # (batch_size, 8 * 8)
-    #adj = np.reshape(adj, (batch_size, int(adj.shape[-1] ** (1 / 2)), int(adj.shape[-1] ** (1 / 2))))
-
-    ops_idx_list = []
-    adj_list = []
-    for i, j in zip(ops_vote, adj):
-        ops_idx_list.append(np.argmax(i, axis=-1).tolist())
-        adj_list.append(j)
-
-    return ops_idx_list, adj_list
+nb201_dataset = NasBench201Dataset(end=0)
 
 
 def query_acc_by_ops(ops: Union[list, np.ndarray], dataset_name, is_random=False, on='valid-accuracy') -> float:
@@ -69,24 +35,25 @@ def query_acc_by_ops(ops: Union[list, np.ndarray], dataset_name, is_random=False
     ops = [OPS_by_IDX_201[i] for i in ops_idx]
     assert ops[0] == 'input' and ops[-1] == 'output'
     arch_str = ops_list_to_nb201_arch_str(ops)
-    idx = nb201api.query_index_by_arch(arch_str)
-    meta_info = nb201api.query_meta_info_by_index(idx, hp='200')
 
     if on == 'valid-accuracy':
-        data = meta_info.get_metrics(dataset_name, 'x-valid', iepoch=None, is_random=is_random)
-        acc = data['accuracy'] / 100
+        acc = nb201_dataset.hash_to_metrics[arch_str][dataset_name][1]
     elif on == 'test-accuracy':
+        '''
         if dataset_name == 'cifar10-valid':
             data = meta_info.get_metrics('cifar10', 'ori-test', iepoch=None, is_random=is_random)
         else:
             data = meta_info.get_metrics(dataset_name, 'x-test', iepoch=None, is_random=is_random)
         acc = data['accuracy'] / 100
+        '''
+        acc = nb201_dataset.hash_to_metrics[arch_str][dataset_name][2]
     else:
         raise ValueError('on should be valid-accuracy or test-accuracy')
-    del meta_info
-    return acc
+
+    return float(acc)
 
 
+'''
 def eval_query_best(model: tf.keras.Model, dataset_name, x_dim: int, z_dim: int, query_amount=10, noise_scale=0.0, version=2):
     # Eval query 1.0
     x = []
@@ -121,23 +88,30 @@ def eval_query_best(model: tf.keras.Model, dataset_name, x_dim: int, z_dim: int,
         except:
             print('invalid')
             invalid += 1
-    '''
+    
     fig, ax = plt.subplots()
     ax.axline((0, 0), slope=1, linewidth=0.2, color='black')
     plt.scatter(x, y, s=[1] * len(x))
     plt.xlim(0.85, 1.2)
     plt.ylim(0.85, 1.2)
     plt.savefig('top.png')
-    '''
+    
     to_inv = None
     if len(y) == 0:
         return invalid, 0, 0, found_arch_list
 
     return invalid, sum(y) / len(y), max(y), found_arch_list
+'''
 
 
-def ensemble_inverse_from_acc(model: tf.keras.Model, num_sample_z: int, x_dim: int, z_dim: int, to_inv_acc, noise_std=0., version=2):
+def inverse_from_acc(model: tf.keras.Model, num_sample_z: int, x_dim: int, z_dim: int, to_inv_acc,
+                              noise_std=0., version=2):
     batch_size = int(tf.shape(to_inv_acc)[0])
+    try:
+        num_nvp = model.num_nvp
+    except:
+        num_nvp = 1
+
     y = tf.repeat(to_inv_acc, num_sample_z, axis=0)  # (batch_size * num_sample_z, 1)
     # z (batch_size * num_sample_z, z_dim)
     y = tf.concat([tf.random.normal((batch_size * num_sample_z, z_dim)), y], axis=-1)  # (num_sample_z, z_dim + 1)
@@ -147,15 +121,15 @@ def ensemble_inverse_from_acc(model: tf.keras.Model, num_sample_z: int, x_dim: i
         raise NotImplementedError
         #rev_latent = rev_latent[:, :x_dim]
     elif version == 2:
-        rev_latent = tf.reshape(rev_latent, (batch_size * model.num_nvp, model.num_nodes, -1))  # (batch_size, num_sample_z, latent_dim)
+        rev_latent = tf.reshape(rev_latent, (batch_size * num_nvp, model.num_nodes, -1))  # (batch_size, num_sample_z, latent_dim)
     else:
         raise ValueError('version')
 
     _, adj, ops_cls, adj_cls = model.decode(rev_latent + tf.random.normal(tf.shape(rev_latent), stddev=noise_std))  # (batch_size, num_sample_z, 8, 8), (batch_size, num_sample_z, 8, 7)
-    ops_cls = tf.reshape(ops_cls, (batch_size * model.num_nvp, num_sample_z, -1, model.num_ops))  # (batch_size, num_sample_z, 8, 7)
+    ops_cls = tf.reshape(ops_cls, (batch_size * num_nvp, num_sample_z, -1, model.num_ops))  # (batch_size, num_sample_z, 8, 7)
     ops_vote = tf.reduce_sum(ops_cls, axis=1).numpy()  # (batch_size, 1, 8 * 7)
 
-    adj = tf.reshape(adj, (batch_size * model.num_nvp, num_sample_z, model.num_nodes, model.num_nodes))  # (batch_size, num_sample_z, 8, 8)
+    adj = tf.reshape(adj, (batch_size * num_nvp, num_sample_z, model.num_nodes, model.num_nodes))  # (batch_size, num_sample_z, 8, 8)
     adj = tf.where(tf.reduce_mean(adj, axis=1) >= 0.5, x=1., y=0.).numpy()  # (batch_size, 8, 8)
 
     ops_idx_list = [np.argmax(i, axis=-1).tolist() for i in ops_vote]
@@ -164,7 +138,7 @@ def ensemble_inverse_from_acc(model: tf.keras.Model, num_sample_z: int, x_dim: i
     return ops_idx_list, adj_list
 
 
-def ensemble_eval_query_best(model: tf.keras.Model, dataset_name, x_dim: int, z_dim: int, query_amount=10, noise_scale=0.0, version=2):
+def eval_query_best(model: tf.keras.Model, dataset_name, x_dim: int, z_dim: int, query_amount=10, noise_scale=0.0, version=2):
     # Eval query 1.0
     y = []
     found_arch_list = []
@@ -172,8 +146,8 @@ def ensemble_eval_query_best(model: tf.keras.Model, dataset_name, x_dim: int, z_
     to_inv_acc = 1.0
     to_inv = tf.repeat(tf.reshape(tf.constant(to_inv_acc), [-1, 1]), query_amount, axis=0)
     #to_inv += noise_scale * tf.random.normal(tf.shape(to_inv))
-    ops_idx_lis, adj_list = ensemble_inverse_from_acc(model, num_sample_z=1, x_dim=x_dim, z_dim=z_dim,
-                                                      noise_std=noise_scale, to_inv_acc=to_inv, version=version)
+    ops_idx_lis, adj_list = inverse_from_acc(model, num_sample_z=1, x_dim=x_dim, z_dim=z_dim,
+                                             noise_std=noise_scale, to_inv_acc=to_inv, version=version)
     for ops_idx, adj in zip(ops_idx_lis, adj_list):
         try:
             if dataset_name != 'nb101':
@@ -204,7 +178,31 @@ def ensemble_eval_query_best(model: tf.keras.Model, dataset_name, x_dim: int, z_
     return invalid, sum(y) / len(y), max(y), found_arch_list
 
 
+def query_tabular(dataset_name: str, archs: Union[List, spektral.data.Dataset]):
+    if isinstance(archs, spektral.data.Dataset):
+        archs = [{'a': graph.a, 'x': graph.x} for graph in archs]
+
+    acc_list = []
+    for idx, i in enumerate(archs):
+        if dataset_name != 'nb101':
+            acc = query_acc_by_ops(i['x'], dataset_name)
+            test_acc = query_acc_by_ops(i['x'], dataset_name, on='test-accuracy')
+        else:
+            i = mask_for_spec(i)
+            metrics = nb101_dataset.get_metrics(i['a'], np.argmax(i['x'], axis=-1))
+            acc = float(metrics[1])
+            test_acc = float(metrics[2])
+        acc_list.append({'valid-accuracy': acc, 'test-accuracy': test_acc})
+
+    return acc_list
+
+
 if __name__ == '__main__':
+    mpl.rcParams['figure.dpi'] = 300
+    random_seed = 0
+    np.random.seed(random_seed)
+    tf.random.set_seed(random_seed)
+
     dataset = 'cifar10-valid'
     num_ops = 7
     num_nodes = 8

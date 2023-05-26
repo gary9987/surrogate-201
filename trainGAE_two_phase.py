@@ -1,5 +1,6 @@
 import argparse
 import copy
+import pickle
 import random
 import numpy as np
 from tensorflow.python.keras.callbacks import CSVLogger, EarlyStopping
@@ -10,10 +11,11 @@ from models.TransformerAE import TransformerAutoencoderNVP
 import tensorflow as tf
 import os
 from datasets.nb201_dataset import NasBench201Dataset, OP_PRIMITIVES_NB201
-from datasets.nb101_dataset import NasBench101Dataset, OP_PRIMITIVES_NB101, mask_padding_vertex_for_spec, mask_padding_vertex_for_model
-from datasets.utils import train_valid_test_split_dataset, mask_graph_dataset, arch_list_to_set, graph_to_str
+from datasets.nb101_dataset import NasBench101Dataset, OP_PRIMITIVES_NB101, mask_for_spec, mask_for_model
+from datasets.utils import train_valid_test_split_dataset, mask_graph_dataset, arch_list_to_set, graph_to_str, \
+    repeat_graph_dataset_element
 from spektral.data import PackedBatchLoader
-from evalGAE import eval_query_best, query_acc_by_ops
+from evalGAE import eval_query_best, query_acc_by_ops, query_tabular
 from utils.py_utils import get_logdir_and_logger
 from spektral.data import Graph
 from utils.tf_utils import to_undiredted_adj
@@ -24,7 +26,8 @@ def parse_args():
     parser.add_argument('--train_sample_amount', type=int, default=50, help='Number of samples to train (default: 50)')
     parser.add_argument('--valid_sample_amount', type=int, default=50, help='Number of samples to train (default: 50)')
     parser.add_argument('--query_budget', type=int, default=192)
-    parser.add_argument('--dataset', type=str, default='cifar10-valid', help='Could be nb101, cifar10-valid, cifar100, ImageNet16-120')
+    parser.add_argument('--dataset', type=str, default='cifar10-valid',
+                        help='Could be nb101, cifar10-valid, cifar100, ImageNet16-120')
     parser.add_argument('--seed', type=int, default=0)
     return parser.parse_args()
 
@@ -314,59 +317,73 @@ def to_loader(datasets, batch_size: int, epochs: int):
     return loader
 
 
-def mask_for_model(arch):
-    new_arch = copy.deepcopy(arch)
-    new_arch['a'], new_arch['x'] = mask_padding_vertex_for_model(new_arch['a'], new_arch['x'])
-    if new_arch['a'] is None:
-        return None
-    return new_arch
+def sample_arch_candidates(model, dataset_name, x_dim, z_dim, visited, sample_amount=200):
+    found_arch_list_set = []
+    max_retry = 10
+    std_idx = 0
+    noise_std_list = [0.0, 1e-5, 5e-5, 1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 0.1]
+    amount_scale_list = [1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.2, 2.4, 2.8, 3.0]
+    while len(found_arch_list_set) < sample_amount and std_idx < max_retry:
+        retry = 0
+        while len(found_arch_list_set) < sample_amount and retry < max_retry:
+            _, _, _, found_arch_list = eval_query_best(model, dataset_name, x_dim, z_dim,
+                                                       noise_scale=noise_std_list[std_idx],
+                                                       query_amount=int(sample_amount * amount_scale_list[std_idx]))
+            if dataset_name == 'nb101':
+                found_arch_list = list(map(mask_for_model, found_arch_list))
+                found_arch_list = list(filter(lambda arch: arch is not None and arch['x'] is not None, found_arch_list))
+
+            found_arch_list = list(filter(lambda arch: graph_to_str(arch) not in visited, found_arch_list))
+            found_arch_list_set.extend(found_arch_list)
+            found_arch_list_set = arch_list_to_set(found_arch_list_set)
+            retry += 1
+        std_idx += 1
+
+    # if retry == max_retry and len(found_arch_list_set) < sample_amount:
+    #    model.set_weights_from_self_ckpt()
+    #    logging.getLogger(__name__).info('Reset model weights')
+    #    return None
+
+    if len(found_arch_list_set) > sample_amount:
+        # shuffle found_arch_list_set
+        random.shuffle(found_arch_list_set)
+        found_arch_list_set = found_arch_list_set[:sample_amount]
+
+    return found_arch_list_set
 
 
-def mask_for_spec(arch):
-    new_arch = copy.deepcopy(arch)
-    new_arch['a'], new_arch['x'] = mask_padding_vertex_for_spec(new_arch['a'], new_arch['x'])
-    return new_arch
-
-
-def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, top_list, logger, repeat, top_k=5):
-    # Generate total 200 architectures
-    _, _, _, found_arch_list = eval_query_best(trainer.model, dataset_name, trainer.x_dim, trainer.z_dim, query_amount=100)
-    _, _, _, found_arch_list2 = eval_query_best(trainer.model, dataset_name, trainer.x_dim,
-                                                trainer.z_dim, query_amount=100, noise_scale=0.05)
-    num_new_found = 0
-    found_arch_list.extend(found_arch_list2)
-    if dataset_name == 'nb101':
-        found_arch_list = list(map(mask_for_model, found_arch_list))
-        found_arch_list = list(filter(lambda arch: arch is not None and arch['x'] is not None, found_arch_list))
-
-    found_arch_list_set = arch_list_to_set(found_arch_list)
-
+def predict_arch_acc(found_arch_list_set, model):
+    """
+    Predict accuracy by INN (performance predictor) and assign
+     the predicted value to found_arch_list_set
+    """
     # Predict accuracy by INN (performance predictor)
     x = tf.stack([tf.constant(i['x']) for i in found_arch_list_set])
     a = tf.stack([tf.constant(i['a']) for i in found_arch_list_set])
     if tf.shape(x)[0] != 0:
         a = to_undiredted_adj(a)
-        _, _, _, reg, _ = trainer.model((x, a), training=False)
+        _, _, _, reg, _ = model((x, a), training=False)
         for i in range(len(found_arch_list_set)):
             found_arch_list_set[i]['y'] = reg[i][-1].numpy()
 
-    # Select top-k to evaluate true label and add to training dataset
-    top_acc_list = []
-    top_test_acc_list = []
-    found_arch_list_set = sorted(found_arch_list_set, key=lambda g: g['y'], reverse=True)[:top_k]
-    for idx, i in enumerate(found_arch_list_set):
-        if dataset_name != 'nb101':
-            acc = query_acc_by_ops(i['x'], dataset_name)
-            test_acc = query_acc_by_ops(i['x'], dataset_name, on='test-accuracy')
-        else:
-            new_i = mask_for_spec(i)
-            metrics = datasets['train'].get_metrics(i['a'], np.argmax(i['x'], axis=-1))
-            acc = float(metrics[1])
-            test_acc = float(metrics[2])
 
-        top_acc_list.append(acc)
-        top_test_acc_list.append(test_acc)
-        found_arch_list_set[idx]['y'] = np.array([acc])
+def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, logger, repeat, top_k=5):
+    # Generate total 200 architectures
+    visited = {graph_to_str(i): i.y.tolist() for i in datasets['train'].graphs if not np.isnan(i.y).any()}
+    found_arch_list_set = sample_arch_candidates(trainer.model, dataset_name, trainer.x_dim, trainer.z_dim, visited,
+                                                 sample_amount=200)
+
+    num_new_found = 0
+    # Predict accuracy by INN (performance predictor)
+    predict_arch_acc(found_arch_list_set, trainer.model)
+
+    # Select top-k to evaluate true label and add to training dataset
+    found_arch_list_set = sorted(found_arch_list_set, key=lambda g: g['y'], reverse=True)[:top_k]
+    acc_list = query_tabular(dataset_name, found_arch_list_set)
+    top_acc_list = [i['valid-accuracy'] for i in acc_list]
+    top_test_acc_list = [i['test-accuracy'] for i in acc_list]
+    for idx, _ in enumerate(found_arch_list_set):
+        found_arch_list_set[idx]['y'] = np.array([acc_list[idx]['valid-accuracy']])
 
     if len(top_acc_list) != 0:
         logger.info('Top acc list: {}'.format(top_acc_list))
@@ -378,34 +395,21 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
     else:
         logger.info('Top acc list is [] in this run')
 
-    train_dict = {graph_to_str(i): i.y.tolist() for i in datasets['train'].graphs}
-
     # Add top found architecture to training dataset
+    valid_visited = {graph_to_str(i): i.y.tolist() for i in datasets['valid'].graphs if not np.isnan(i.y).any()}
     for i in found_arch_list_set:
         graph_str = graph_to_str(i)
-        if graph_str in train_dict:
-            if graph_str not in top_list and np.isnan(train_dict[graph_str]):
-                datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * repeat)
-                top_list.append(graph_str)
+        if graph_str not in visited:
+            if graph_str not in valid_visited:
                 logger.info(f'Data not in train and not in top_list {i["y"].tolist()}')
-                logger.info(f'Add to train {i["x"].tolist()} {i["a"].tolist()} {i["y"].tolist()}')
                 num_new_found += 1
-            elif graph_str not in top_list and not np.isnan(train_dict[graph_str]):
-                logger.info(f'Data in train but not in top_list {i["y"].tolist()}')
-                # datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * 10)
-                top_list.append(graph_str)
             else:
-                logger.info(f'Data in train and in top_list {i["y"].tolist()}')
-        else:
-            if graph_str not in top_list:
-                logger.info(f'Data not in train and not in top_list {i["y"].tolist()}')
-                logger.info(f'Add to train {i["x"].tolist()} {i["a"].tolist()} {i["y"].tolist()}')
-                datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * repeat)
-                top_list.append(graph_str)
-                num_new_found += 1
+                logger.info(f'Data in valid but not in train {i["y"].tolist()}')
+
+            datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * repeat)
+            logger.info(f'Add to train {i["x"].tolist()} {i["a"].tolist()} {i["y"].tolist()}')
 
     logger.info(f'{datasets["train"]}')
-    logger.info(f'Length of top_list {len(top_list)}')
 
     loader = to_loader(datasets, batch_size, train_epochs)
     callbacks = [CSVLogger(os.path.join(logdir, f"learning_curve_phase2_retrain.csv")),
@@ -421,18 +425,20 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
                 steps_per_epoch=loader['train'].steps_per_epoch,
                 validation_steps=loader['valid'].steps_per_epoch)
 
-    results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
-    logger.info(str(dict(zip(trainer.metrics_names, results))))
+    # results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
+    # logger.info(str(dict(zip(trainer.metrics_names, results))))
 
     return top_acc_list, top_test_acc_list, found_arch_list_set, num_new_found
 
 
-def prepare_model(nvp_config, latent_dim, num_layers, d_model, num_heads, dff, num_ops, num_nodes, num_adjs, dropout_rate, eps_scale):
+def prepare_model(nvp_config, latent_dim, num_layers, d_model, num_heads, dff, num_ops, num_nodes, num_adjs,
+                  dropout_rate, eps_scale):
     pretrained_model = GraphAutoencoder(latent_dim=latent_dim, num_layers=num_layers,
                                         d_model=d_model, num_heads=num_heads,
                                         dff=dff, num_ops=num_ops, num_nodes=num_nodes,
                                         num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=eps_scale)
-    pretrained_model((tf.random.normal(shape=(1, num_nodes, num_ops)), tf.random.normal(shape=(1, num_nodes, num_nodes))))
+    pretrained_model(
+        (tf.random.normal(shape=(1, num_nodes, num_ops)), tf.random.normal(shape=(1, num_nodes, num_nodes))))
 
     model = GraphAutoencoderNVP(nvp_config=nvp_config, latent_dim=latent_dim, num_layers=num_layers,
                                 d_model=d_model, num_heads=num_heads,
@@ -483,10 +489,16 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         num_ops = len(OP_PRIMITIVES_NB101)  # 5
         num_nodes = 7
         num_adjs = num_nodes ** 2
-        datasets = train_valid_test_split_dataset(NasBench101Dataset(start=0, end=423623),
+        if os.path.exists('datasets/NasBench101Dataset.cache'):
+            datasets = pickle.load(open('datasets/NasBench101Dataset.cache', 'rb'))
+        else:
+            datasets = NasBench101Dataset(start=0, end=423623)
+            with open('datasets/NasBench101Dataset.cache', 'wb') as f:
+                pickle.dump(datasets, f)
+        datasets = train_valid_test_split_dataset(datasets,
                                                   ratio=[0.8, 0.1, 0.1],
                                                   shuffle=True,
-                                                  shuffle_seed=0)
+                                                  shuffle_seed=random_seed)
     else:
         # 15624
         num_ops = len(OP_PRIMITIVES_NB201)  # 7
@@ -497,7 +509,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
                                                                      hp=str(label_epochs), seed=False),
                                                   ratio=[0.8, 0.1, 0.1],
                                                   shuffle=True,
-                                                  shuffle_seed=0)
+                                                  shuffle_seed=random_seed)
 
     for key in datasets:
         if is_only_validation_data:
@@ -551,61 +563,68 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     global_top_acc_list = []
     global_top_test_acc_list = []
     global_top_arch_list = []
+    record_top = {'valid': [], 'test': []}
 
     if train_phase[1]:
-        if finetune:
-            batch_size = 256
-        else:
-            batch_size = 64
+        batch_size = 64
         repeat_label = 20
         now_queried = train_sample_amount + valid_sample_amount
         logger.info('Train phase 2')
-        datasets['train'] = mask_graph_dataset(datasets['train'], train_sample_amount, repeat_label, random_seed=random_seed)
-        datasets['valid'] = mask_graph_dataset(datasets['valid'], valid_sample_amount, repeat_label, random_seed=random_seed)
-        if not finetune:
-            datasets['train'].filter(lambda g: not np.isnan(g.y))
-            datasets['valid'].filter(lambda g: not np.isnan(g.y))
+        datasets['train_1'] = mask_graph_dataset(datasets['train'], train_sample_amount, 1, random_seed=random_seed)
+        datasets['valid_1'] = mask_graph_dataset(datasets['valid'], valid_sample_amount, 1, random_seed=random_seed)
+        datasets['train_1'].filter(lambda g: not np.isnan(g.y))
+        datasets['valid_1'].filter(lambda g: not np.isnan(g.y))
+        datasets['train'] = repeat_graph_dataset_element(datasets['train_1'], repeat_label)
+        datasets['valid'] = repeat_graph_dataset_element(datasets['valid_1'], repeat_label)
+
+        # Add initial data to records
+        acc_list = query_tabular(dataset_name, datasets['train_1'])
+        global_top_acc_list.extend([i['valid-accuracy'] for i in acc_list])
+        global_top_test_acc_list.extend([i['test-accuracy'] for i in acc_list])
+        acc_list = query_tabular(dataset_name, datasets['valid_1'])
+        global_top_acc_list.extend([i['valid-accuracy'] for i in acc_list])
+        global_top_test_acc_list.extend([i['test-accuracy'] for i in acc_list])
 
         loader = to_loader(datasets, batch_size, train_epochs)
         callbacks = [CSVLogger(os.path.join(logdir, f"learning_curve_phase2.csv")),
-                     #tensorboard_callback,
-                     tf.keras.callbacks.ReduceLROnPlateau(monitor='val_total_loss', factor=0.1, patience=patience//2, verbose=1,
-                                                          min_lr=1e-5),
+                     # tensorboard_callback,
+                     tf.keras.callbacks.ReduceLROnPlateau(monitor='val_total_loss', factor=0.1, patience=patience // 2,
+                                                          verbose=1, min_lr=1e-5),
                      EarlyStopping(monitor='val_total_loss', patience=patience, restore_best_weights=True)]
         trainer = train(2, model, loader, train_epochs, logdir, callbacks,
                         x_dim=x_dim, y_dim=y_dim, z_dim=z_dim, finetune=finetune)
-        results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
-        logger.info(str(dict(zip(trainer.metrics_names, results))))
+        # results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
+        # logger.info(str(dict(zip(trainer.metrics_names, results))))
 
         # Recreate Trainer for retrain
         retrain_model.set_weights(model.get_weights())
         trainer = Trainer2(retrain_model, x_dim, y_dim, z_dim, finetune=retrain_finetune, is_rank_weight=False)
         trainer.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3), run_eagerly=False)
-        '''
-        if not retrain_finetune:
-            datasets['train'].filter(lambda g: not np.isnan(g.y))
-            datasets['valid'].filter(lambda g: not np.isnan(g.y))
-        '''
+
         # Reset the lr for retrain
-        top_list = []
         run = 0
         while now_queried < query_budget and run <= 200:
             logger.info('')
             logger.info(f'Retrain run {run}')
-            top_acc_list, top_test_acc_list, top_arch_list, num_new_found = retrain(trainer, datasets, dataset_name, batch_size,
-                                                                 retrain_epochs, logdir, top_list, logger,
-                                                                 repeat_label, top_k)
+            top_acc_list, top_test_acc_list, top_arch_list, num_new_found = retrain(trainer, datasets, dataset_name,
+                                                                                    batch_size, retrain_epochs, logdir,
+                                                                                    logger, repeat_label, top_k)
             now_queried += num_new_found
             logger.info('Now queried: ' + str(now_queried))
+
             if now_queried > query_budget:
                 break
+
             global_top_acc_list += top_acc_list
             global_top_test_acc_list += top_test_acc_list
             global_top_arch_list += top_arch_list
             run += 1
 
-            logger.info(f'History top acc: {max(global_top_acc_list)}')
-            logger.info(f'History top test acc: {max(global_top_test_acc_list)}')
+            record_top['valid'].append({now_queried: sorted(global_top_acc_list, reverse=True)[:5]})
+            record_top['test'].append({now_queried: sorted(global_top_test_acc_list, reverse=True)[:5]})
+
+            logger.info(f'History top 5 acc: {sorted(global_top_acc_list, reverse=True)[:5]}')
+            logger.info(f'History top 5 test acc: {sorted(global_top_test_acc_list, reverse=True)[:5]}')
             # if patience_cot >= patience:
             #    break
 
@@ -618,12 +637,9 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
 
     # invalid, avg_acc, best_acc, found_arch_list = eval_query_best(model, x_dim, z_dim, query_amount=10)
     logger.info('Final result')
-    logger.info(f'Avg found acc {sum(global_top_acc_list) / len(global_top_acc_list)}')
     logger.info(f'Best found acc {max(global_top_acc_list)}')
-    logger.info(f'Avg test acc {sum(global_top_test_acc_list) / len(global_top_test_acc_list)}')
     logger.info(f'Best test acc {max(global_top_test_acc_list)}')
-
-    return sum(global_top_acc_list) / len(global_top_acc_list), max(global_top_acc_list), sum(global_top_test_acc_list) / len(global_top_test_acc_list), max(global_top_test_acc_list)
+    return max(global_top_acc_list), max(global_top_test_acc_list), record_top
 
 
 if __name__ == '__main__':

@@ -32,19 +32,6 @@ def train_valid_test_split_dataset(data, ratio=[0.8, 0.1, 0.1], shuffle=False, s
     return ret
 
 
-def ops_list_to_nb201_arch_str(ops):
-    # partial code from: https://github.com/jovitalukasik/SVGe/blob/main/datasets/NASBench201.py#L239
-    steps_coding = ['0', '0', '1', '0', '1', '2']
-
-    node_1 = '|' + ops[1] + '~' + steps_coding[0] + '|'
-    node_2 = '|' + ops[2] + '~' + steps_coding[1] + '|' + ops[3] + '~' + steps_coding[2] + '|'
-    node_3 = '|' + ops[4] + '~' + steps_coding[3] + '|' + ops[5] + '~' + steps_coding[4] + '|' + ops[
-        6] + '~' + steps_coding[5] + '|'
-    nodes_nb201 = node_1 + '+' + node_2 + '+' + node_3
-
-    return nodes_nb201
-
-
 def to_NVP_data(graph_dataset, z_dim, reg_size, repeat=1):
     features = []
     y_list = []
