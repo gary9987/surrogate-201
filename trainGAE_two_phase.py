@@ -456,13 +456,15 @@ def prepare_model(nvp_config, latent_dim, num_layers, d_model, num_heads, dff, n
 
 
 def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_budget):
-    logdir, logger = get_logdir_and_logger(os.path.join(f'{train_sample_amount}_{valid_sample_amount}_{query_budget}',
-                                                        dataset_name), f'trainGAE_two_phase_{seed}.log')
+    top_k = 5
+    finetune = True
+    retrain_finetune = True
+    logdir, logger = get_logdir_and_logger(
+        os.path.join(f'{train_sample_amount}_{valid_sample_amount}_{query_budget}_finetune{finetune}',
+                     dataset_name), f'trainGAE_two_phase_{seed}.log')
     random_seed = seed
     tf.random.set_seed(random_seed)
     random.seed(random_seed)
-
-    top_k = 5
 
     is_only_validation_data = True
     train_phase = [0, 1]  # 0 not train, 1 train
@@ -477,8 +479,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     dff = 256
     num_layers = 3
     num_heads = 3
-    finetune = True
-    retrain_finetune = True
+
     latent_dim = 16
 
     train_epochs = 500
@@ -598,12 +599,12 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
 
         # Recreate Trainer for retrain
         retrain_model.set_weights(model.get_weights())
-        trainer = Trainer2(retrain_model, x_dim, y_dim, z_dim, finetune=retrain_finetune, is_rank_weight=False)
+        trainer = Trainer2(retrain_model, x_dim, y_dim, z_dim, finetune=retrain_finetune, is_rank_weight=True)
         trainer.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3), run_eagerly=False)
 
         # Reset the lr for retrain
         run = 0
-        while now_queried < query_budget and run <= 200:
+        while now_queried < query_budget and run <= 100:
             logger.info('')
             logger.info(f'Retrain run {run}')
             top_acc_list, top_test_acc_list, top_arch_list, num_new_found = retrain(trainer, datasets, dataset_name,

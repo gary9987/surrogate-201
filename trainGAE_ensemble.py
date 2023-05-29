@@ -326,7 +326,7 @@ def train(phase: int, model, loader, train_epochs, logdir, callbacks=None, x_dim
     return trainer
 
 
-def get_new_archs_and_add_to_dataset(dataset_name, datasets, top_k, repeat, top_list,
+def get_new_archs_and_add_to_dataset(dataset_name, datasets, top_k, repeat,
                                      found_arch_list_set, visited, top_acc_list, top_test_acc_list):
     """
     Select top_k architectures from arch_list_set and query true accuracy then add to dataset
@@ -353,36 +353,19 @@ def get_new_archs_and_add_to_dataset(dataset_name, datasets, top_k, repeat, top_
         logger.info('Top acc list is [] in this run')
 
     # Add top found architecture to training dataset
-    valid_visited = [graph_to_str(i) for i in datasets['valid_1'].graphs]
+    valid_visited = {graph_to_str(i): i.y.tolist() for i in datasets['valid'].graphs if not np.isnan(i.y).any()}
     for i in found_arch_list_set:
         graph_str = graph_to_str(i)
-        if graph_str in visited:
-            if graph_str not in top_list and np.isnan(visited[graph_str]):
-                if graph_str not in valid_visited:
-                    logger.info(f'Data not in train and not in top_list {i["y"].tolist()}')
-                    num_new_found += 1
-                else:
-                    logger.info(f'Data in valid but not in train {i["y"].tolist()}')
-                logger.info(f'Add to train {i["x"].tolist()} {i["a"].tolist()} {i["y"].tolist()}')
-                datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * repeat)
-                datasets['train_1'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])])
-                top_list.append(graph_str)
-            elif graph_str not in top_list and not np.isnan(visited[graph_str]):
-                logger.info(f'Data in train but not in top_list {i["y"].tolist()}')
-                top_list.append(graph_str)
+        if graph_str not in visited:
+            if graph_str not in valid_visited:
+                logger.info(f'Data not in train and not in valid {i["y"].tolist()}')
+                num_new_found += 1
             else:
-                logger.info(f'Data in train and in top_list {i["y"].tolist()}')
-        else:
-            if graph_str not in top_list:
-                if graph_str not in valid_visited:
-                    logger.info(f'Data not in train and not in top_list {i["y"].tolist()}')
-                    num_new_found += 1
-                else:
-                    logger.info(f'Data in valid but not in train {i["y"].tolist()}')
-                logger.info(f'Add to train {i["x"].tolist()} {i["a"].tolist()} {i["y"].tolist()}')
-                datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * repeat)
-                datasets['train_1'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])])
-                top_list.append(graph_str)
+                logger.info(f'Data in valid but not in train {i["y"].tolist()}')
+
+            logger.info(f'Add to train {i["x"].tolist()} {i["a"].tolist()} {i["y"].tolist()}')
+            datasets['train'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])] * repeat)
+            datasets['train_1'].graphs.extend([Graph(x=i['x'], a=i['a'], y=i['y'])])
 
     return num_new_found, found_arch_list_set
 
@@ -440,9 +423,9 @@ def predict_arch_acc(found_arch_list_set, model, theta):
             found_arch_list_set[i]['y'] = reg[i]
 
 
-def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, top_list, repeat, top_k=5):
+def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, repeat, top_k=5):
     logger = logging.getLogger(__name__)
-    visited = {graph_to_str(i): i.y.tolist() for i in datasets['train'].graphs}
+    visited = {graph_to_str(i): i.y.tolist() for i in datasets['train'].graphs if not np.isnan(i.y).any()}
     # Generate total at least sample amount architectures
     found_arch_list_set = sample_arch_candidates(trainer.model, dataset_name, trainer.x_dim, trainer.z_dim, visited,
                                                  sample_amount=200)
@@ -477,7 +460,7 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
     found_arch_list_set = sorted(found_arch_list_set, key=lambda g: g['y'], reverse=True)
 
     num_new_found, top_arch_list_set = get_new_archs_and_add_to_dataset(dataset_name, datasets, top_k,
-                                                                        repeat, top_list, found_arch_list_set, visited,
+                                                                        repeat, found_arch_list_set, visited,
                                                                         top_acc_list, top_test_acc_list)
     '''
     if num_new_found == 0:
@@ -492,7 +475,6 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, t
 
     logger.info(f'{datasets["train"]}')
     logger.info(f'{datasets["train_1"]}')
-    logger.info(f'Length of top_list {len(top_list)}')
 
     loader = to_loader(datasets, batch_size, train_epochs)
     callbacks = [CSVLogger(os.path.join(logdir, f"learning_curve_phase2_retrain.csv")),
@@ -582,7 +564,9 @@ def prepare_model(num_nvp, nvp_config, latent_dim, num_layers, d_model, num_head
 
 def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_budget):
     top_k = 1
-    logdir, logger = get_logdir_and_logger(os.path.join(f'{train_sample_amount}_{valid_sample_amount}_{query_budget}_top{top_k}_ensemble',
+    finetune = False
+    retrain_finetune = False
+    logdir, logger = get_logdir_and_logger(os.path.join(f'{train_sample_amount}_{valid_sample_amount}_{query_budget}_top{top_k}_ensemble_finetune{finetune}',
                                                         dataset_name), f'trainGAE_ensemble_{seed}.log')
     random_seed = seed
     tf.random.set_seed(random_seed)
@@ -603,8 +587,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     dff = 256
     num_layers = 3
     num_heads = 3
-    finetune = False
-    retrain_finetune = False
+
     latent_dim = 16
 
     train_epochs = 500
@@ -656,8 +639,8 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     num_nvp = 10
     nvp_config = {
         'n_couple_layer': 4,
-        'n_hid_layer': 8,
-        'n_hid_dim': 32,
+        'n_hid_layer': 4,
+        'n_hid_dim': 256,
         'name': 'NVP',
         'inp_dim': tot_dim
     }
@@ -673,8 +656,8 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         batch_size = 256
         loader = to_loader(datasets, batch_size, train_epochs)
         callbacks = [CSVLogger(os.path.join(logdir, "learning_curve_phase1.csv")),
-                     tf.keras.callbacks.ReduceLROnPlateau(monitor='val_rec_loss', factor=0.1, patience=50, verbose=1,
-                                                          min_lr=1e-5),
+                     tf.keras.callbacks.ReduceLROnPlateau(monitor='val_rec_loss', factor=0.1, patience=patience // 2,
+                                                          verbose=1, min_lr=1e-5),
                      tensorboard_callback,
                      EarlyStopping(monitor='val_rec_loss', patience=patience, restore_best_weights=True)]
         trainer = train(1, pretrained_model, loader, train_epochs, logdir, callbacks)
@@ -737,7 +720,6 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         trainer = Trainer2(model, x_dim, y_dim, z_dim, finetune=retrain_finetune, is_rank_weight=False)
         trainer.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3), run_eagerly=False)
 
-        top_list = []
         run = 0
 
         while now_queried < query_budget and run <= 450:
@@ -745,13 +727,15 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
             logger.info(f'Retrain run {run}')
             top_acc_list, top_test_acc_list, top_arch_list, num_new_found = retrain(trainer, datasets, dataset_name,
                                                                                     batch_size,
-                                                                                    retrain_epochs, logdir, top_list,
+                                                                                    retrain_epochs, logdir,
                                                                                     repeat_label, top_k)
 
             global_top_acc_list += top_acc_list
             global_top_test_acc_list += top_test_acc_list
             global_top_arch_list += top_arch_list
             now_queried += num_new_found
+            logger.info(f'Now queried: {now_queried}')
+
             if now_queried > query_budget:
                 global_top_test_acc_list = global_top_test_acc_list[: query_budget]
                 global_top_acc_list = global_top_acc_list[: query_budget]
@@ -760,6 +744,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
             run += 1
             record_top['valid'].append({now_queried: sorted(global_top_acc_list, reverse=True)[:5]})
             record_top['test'].append({now_queried: sorted(global_top_test_acc_list, reverse=True)[:5]})
+
 
             if len(top_acc_list) != 0 and max(top_acc_list) > history_top:
                 history_top = max(top_acc_list)
