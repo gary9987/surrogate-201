@@ -6,14 +6,13 @@ from datasets.nb101_dataset import NasBench101Dataset, mask_padding_vertex_for_s
     mask_for_spec
 from datasets.nb201_dataset import NasBench201Dataset, OPS_by_IDX_201, ADJACENCY, ops_list_to_nb201_arch_str
 from datasets.transformation import OnlyValidAccTransform, OnlyFinalAcc, LabelScale
-from datasets.utils import train_valid_test_split_dataset
+from datasets.utils import train_valid_test_split_dataset, mask_graph_dataset
 from models.GNN import GraphAutoencoderNVP
 from nats_bench import create
 import matplotlib.pyplot as plt
 from spektral.data import BatchLoader
 import matplotlib as mpl
 from utils.tf_utils import to_undiredted_adj
-
 
 nb201api = create(None, 'tss', fast_mode=True, verbose=False)
 nb101_dataset = NasBench101Dataset(end=0)
@@ -88,14 +87,14 @@ def eval_query_best(model: tf.keras.Model, dataset_name, x_dim: int, z_dim: int,
         except:
             print('invalid')
             invalid += 1
-    
+
     fig, ax = plt.subplots()
     ax.axline((0, 0), slope=1, linewidth=0.2, color='black')
     plt.scatter(x, y, s=[1] * len(x))
     plt.xlim(0.85, 1.2)
     plt.ylim(0.85, 1.2)
     plt.savefig('top.png')
-    
+
     to_inv = None
     if len(y) == 0:
         return invalid, 0, 0, found_arch_list
@@ -105,7 +104,7 @@ def eval_query_best(model: tf.keras.Model, dataset_name, x_dim: int, z_dim: int,
 
 
 def inverse_from_acc(model: tf.keras.Model, num_sample_z: int, x_dim: int, z_dim: int, to_inv_acc,
-                              noise_std=0., version=2):
+                     noise_std=0., version=2):
     batch_size = int(tf.shape(to_inv_acc)[0])
     try:
         num_nvp = model.num_nvp
@@ -119,17 +118,21 @@ def inverse_from_acc(model: tf.keras.Model, num_sample_z: int, x_dim: int, z_dim
     rev_latent = model.inverse(y)  # (num_sample_z, num_nvp, latent_dim)
     if version == 1:
         raise NotImplementedError
-        #rev_latent = rev_latent[:, :x_dim]
+        # rev_latent = rev_latent[:, :x_dim]
     elif version == 2:
-        rev_latent = tf.reshape(rev_latent, (batch_size * num_nvp, model.num_nodes, -1))  # (batch_size, num_sample_z, latent_dim)
+        rev_latent = tf.reshape(rev_latent,
+                                (batch_size * num_nvp, model.num_nodes, -1))  # (batch_size, num_sample_z, latent_dim)
     else:
         raise ValueError('version')
 
-    _, adj, ops_cls, adj_cls = model.decode(rev_latent + tf.random.normal(tf.shape(rev_latent), stddev=noise_std))  # (batch_size, num_sample_z, 8, 8), (batch_size, num_sample_z, 8, 7)
-    ops_cls = tf.reshape(ops_cls, (batch_size * num_nvp, num_sample_z, -1, model.num_ops))  # (batch_size, num_sample_z, 8, 7)
+    _, adj, ops_cls, adj_cls = model.decode(rev_latent + tf.random.normal(tf.shape(rev_latent),
+                                                                          stddev=noise_std))  # (batch_size, num_sample_z, 8, 8), (batch_size, num_sample_z, 8, 7)
+    ops_cls = tf.reshape(ops_cls,
+                         (batch_size * num_nvp, num_sample_z, -1, model.num_ops))  # (batch_size, num_sample_z, 8, 7)
     ops_vote = tf.reduce_sum(ops_cls, axis=1).numpy()  # (batch_size, 1, 8 * 7)
 
-    adj = tf.reshape(adj, (batch_size * num_nvp, num_sample_z, model.num_nodes, model.num_nodes))  # (batch_size, num_sample_z, 8, 8)
+    adj = tf.reshape(adj, (
+    batch_size * num_nvp, num_sample_z, model.num_nodes, model.num_nodes))  # (batch_size, num_sample_z, 8, 8)
     adj = tf.where(tf.reduce_mean(adj, axis=1) >= 0.5, x=1., y=0.).numpy()  # (batch_size, 8, 8)
 
     ops_idx_list = [np.argmax(i, axis=-1).tolist() for i in ops_vote]
@@ -138,14 +141,15 @@ def inverse_from_acc(model: tf.keras.Model, num_sample_z: int, x_dim: int, z_dim
     return ops_idx_list, adj_list
 
 
-def eval_query_best(model: tf.keras.Model, dataset_name, x_dim: int, z_dim: int, query_amount=10, noise_scale=0.0, version=2):
+def eval_query_best(model: tf.keras.Model, dataset_name, x_dim: int, z_dim: int, query_amount=10, noise_scale=0.0,
+                    version=2):
     # Eval query 1.0
     y = []
     found_arch_list = []
     invalid = 0
     to_inv_acc = 1.0
     to_inv = tf.repeat(tf.reshape(tf.constant(to_inv_acc), [-1, 1]), query_amount, axis=0)
-    #to_inv += noise_scale * tf.random.normal(tf.shape(to_inv))
+    # to_inv += noise_scale * tf.random.normal(tf.shape(to_inv))
     ops_idx_lis, adj_list = inverse_from_acc(model, num_sample_z=1, x_dim=x_dim, z_dim=z_dim,
                                              noise_std=noise_scale, to_inv_acc=to_inv, version=version)
     for ops_idx, adj in zip(ops_idx_lis, adj_list):
@@ -233,42 +237,48 @@ if __name__ == '__main__':
     }
 
     model = GraphAutoencoderNVP(nvp_config=nvp_config, latent_dim=latent_dim, num_layers=num_layers,
-                                d_model=d_model, num_heads=num_heads,dff=dff, num_ops=num_ops, num_nodes=num_nodes,
+                                d_model=d_model, num_heads=num_heads, dff=dff, num_ops=num_ops, num_nodes=num_nodes,
                                 num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=0.)
     model((tf.random.normal(shape=(1, num_nodes, num_ops)), tf.random.normal(shape=(1, num_nodes, num_nodes))))
     # model.load_weights('logs/phase2_model/modelTAE_weights_phase2')
-    model.load_weights('logs/20230425-162536/modelGAE_weights_phase2')
-    datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, dataset=dataset, hp=str(200), seed=False),
-                                              ratio=[0.8, 0.1, 0.1],
-                                              shuffle=True,
-                                              shuffle_seed=0)
+    model.load_weights('logs/350_50_192_finetuneTrue/ImageNet16-120/20230530-213427/modelGAE_weights_phase2')
+    datasets = train_valid_test_split_dataset(
+        NasBench201Dataset(start=0, end=15624, dataset=dataset, hp=str(200), seed=False),
+        ratio=[0.8, 0.1, 0.1],
+        shuffle=True,
+        shuffle_seed=0)
 
     for key in datasets:
         datasets[key].apply(OnlyValidAccTransform())
         datasets[key].apply(OnlyFinalAcc())
         datasets[key].apply(LabelScale(scale=0.01))
 
+    datasets['train'] = mask_graph_dataset(datasets['train'], 350, 1, random_seed=random_seed)
+    datasets['valid'] = mask_graph_dataset(datasets['valid'], 50, 1, random_seed=random_seed)
+    datasets['train'].filter(lambda g: not np.isnan(g.y))
+    datasets['valid'].filter(lambda g: not np.isnan(g.y))
+
     # Eval inverse
-    datasets['train'] = datasets['train'][:350]
-    datasets['valid'] = datasets['valid'][:50]
     x = []
     y = []
     invalid = 0
     loader = BatchLoader(datasets[plot_on_slit], batch_size=512, epochs=1)
     for _, label_acc in loader:
-        ops_idx_lis, adj_list = inverse_from_acc(model, num_sample_z=1, x_dim=x_dim, z_dim=z_dim, to_inv_acc=label_acc[:, -1:])
+        ops_idx_lis, adj_list = inverse_from_acc(model, num_sample_z=1, x_dim=x_dim, z_dim=z_dim,
+                                                 to_inv_acc=label_acc[:, -1:].astype(np.float32))
 
         for ops_idx, adj, query_acc in zip(ops_idx_lis, adj_list, label_acc[:, -1]):
             try:
                 ops_str_list = [OPS_by_IDX_201[i] for i in ops_idx]
-                #print(adj)
+                # print(adj)
                 arch_str = ops_list_to_nb201_arch_str(ops_str_list)
-                #print(arch_str)
+                # print(arch_str)
 
                 arch_idx = nb201api.query_index_by_arch(arch_str)
 
                 acc_list = [float(query_acc)]
-                data = nb201api.query_meta_info_by_index(arch_idx, hp='200').get_metrics(dataset, 'x-valid', iepoch=None, is_random=False)
+                data = nb201api.query_meta_info_by_index(arch_idx, hp='200').get_metrics(dataset, 'x-valid',
+                                                                                         iepoch=None, is_random=False)
                 acc = data['accuracy'] / 100.
 
                 x.append(float(query_acc))
@@ -281,10 +291,12 @@ if __name__ == '__main__':
     print('Number of invalid decode', invalid)
     fig, ax = plt.subplots()
     ax.axline((0, 0), slope=1, linewidth=0.2, color='black')
-    plt.scatter(x, y, s=[1]*len(x))
+    ax.set_xlabel('Query Accuracy')
+    ax.set_ylabel('True Accuracy')
+    plt.scatter(x, y, s=[1] * len(x))
     plt.xlim(0., 1.)
     plt.ylim(0., 1.)
-    plt.savefig('inverse.png')
+    plt.savefig(f'inverse_{plot_on_slit}.png')
     plt.cla()
 
     # Eval regression
@@ -302,10 +314,12 @@ if __name__ == '__main__':
     print('Number of invalid decode', invalid)
     fig, ax = plt.subplots()
     ax.axline((0, 0), slope=1, linewidth=0.2, color='black')
+    ax.set_xlabel('Predicted Accuracy')
+    ax.set_ylabel('True Accuracy')
     plt.scatter(x, y, s=[1] * len(x))
     plt.xlim(0., 1.)
     plt.ylim(0., 1.)
-    plt.savefig('regresion.png')
+    plt.savefig(f'regresion_{plot_on_slit}.png')
     plt.cla()
 
     # Eval decending
@@ -330,7 +344,7 @@ if __name__ == '__main__':
             idx = nb201api.query_index_by_arch(arch_str)
 
             data = nb201api.query_meta_info_by_index(idx, hp='200').get_metrics(dataset, 'x-valid', iepoch=None,
-                                                                                     is_random=False)
+                                                                                is_random=False)
             acc = data['accuracy'] / 100.
             print(data['accuracy'])
             x.append(query_acc)
@@ -342,13 +356,15 @@ if __name__ == '__main__':
     print('Number of invalid decode', invalid)
     fig, ax = plt.subplots()
     ax.axline((0, 0), slope=1, linewidth=0.2, color='black')
+    ax.set_xlabel('Query Accuracy')
+    ax.set_ylabel('True Accuracy')
     plt.scatter(x, y, s=[1] * len(x))
     plt.xlim(0., 1.)
     plt.ylim(0., 1.)
     plt.savefig('decending.png')
     plt.cla()
 
-    invalid, avg_acc, best_acc, _ = eval_query_best(model, dataset, x_dim, z_dim)
-    print('Number of invalid decode', invalid)
-    print('Avg found acc', avg_acc)
-    print('Best found acc', best_acc)
+    # invalid, avg_acc, best_acc, _ = eval_query_best(model, dataset, x_dim, z_dim)
+    # print('Number of invalid decode', invalid)
+    # print('Avg found acc', avg_acc)
+    # print('Best found acc', best_acc)
