@@ -1,10 +1,14 @@
+import os
+import pickle
 from typing import Union, List
 import numpy as np
 import spektral
 import tensorflow as tf
 from datasets.nb101_dataset import NasBench101Dataset, mask_padding_vertex_for_spec, mask_padding_vertex_for_model, \
     mask_for_spec
-from datasets.nb201_dataset import NasBench201Dataset, OPS_by_IDX_201, ADJACENCY, ops_list_to_nb201_arch_str
+from datasets.nb201_dataset import NasBench201Dataset, OPS_by_IDX_201, ADJACENCY, ops_list_to_nb201_arch_str, \
+    OP_PRIMITIVES_NB201
+from datasets.nb101_dataset import OP_PRIMITIVES_NB101, NasBench101Dataset, pad_nb101_graph
 from datasets.transformation import OnlyValidAccTransform, OnlyFinalAcc, LabelScale
 from datasets.utils import train_valid_test_split_dataset, mask_graph_dataset
 from models.GNN import GraphAutoencoderNVP
@@ -207,10 +211,45 @@ if __name__ == '__main__':
     np.random.seed(random_seed)
     tf.random.set_seed(random_seed)
 
-    dataset = 'cifar10-valid'
-    num_ops = 7
-    num_nodes = 8
-    num_adjs = 64
+    dataset_name = 'cifar10-valid'
+    plot_on_slit = 'train'  # train, valid, test
+
+    if dataset_name == 'nb101':
+        num_ops = len(OP_PRIMITIVES_NB101)  # 5
+        num_nodes = 7
+        num_adjs = num_nodes ** 2
+        if os.path.exists('datasets/NasBench101Dataset.cache'):
+            datasets = pickle.load(open('datasets/NasBench101Dataset.cache', 'rb'))
+        else:
+            datasets = NasBench101Dataset(start=0, end=423623)
+            with open('datasets/NasBench101Dataset.cache', 'wb') as f:
+                pickle.dump(datasets, f)
+        datasets = train_valid_test_split_dataset(datasets,
+                                                  ratio=[0.8, 0.1, 0.1],
+                                                  shuffle=True,
+                                                  shuffle_seed=random_seed)
+    else:
+        # 15624
+        num_ops = len(OP_PRIMITIVES_NB201)  # 7
+        num_nodes = 8
+        num_adjs = num_nodes ** 2
+        label_epochs = 200
+        datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, dataset=dataset_name,
+                                                                     hp=str(label_epochs), seed=False),
+                                                  ratio=[0.8, 0.1, 0.1],
+                                                  shuffle=True,
+                                                  shuffle_seed=random_seed)
+
+    for key in datasets:
+        datasets[key].apply(OnlyValidAccTransform())
+        datasets[key].apply(OnlyFinalAcc())
+        if dataset_name != 'nb101':
+                datasets[key].apply(LabelScale(scale=0.01))
+
+    datasets['train'] = mask_graph_dataset(datasets['train'], 350, 1, random_seed=random_seed)
+    datasets['valid'] = mask_graph_dataset(datasets['valid'], 50, 1, random_seed=random_seed)
+    datasets['train'].filter(lambda g: not np.isnan(g.y))
+    datasets['valid'].filter(lambda g: not np.isnan(g.y))
 
     d_model = 32
     dropout_rate = 0.0
@@ -226,37 +265,20 @@ if __name__ == '__main__':
     tot_dim = y_dim + z_dim  # 28
     pad_dim = tot_dim - x_dim  # 14
 
-    plot_on_slit = 'train'  # train, valid, test
-
     nvp_config = {
         'n_couple_layer': 4,
         'n_hid_layer': 4,
         'n_hid_dim': 256,
         'name': 'NVP',
-        'inp_dim': x_dim
+        'inp_dim': tot_dim
     }
 
     model = GraphAutoencoderNVP(nvp_config=nvp_config, latent_dim=latent_dim, num_layers=num_layers,
-                                d_model=d_model, num_heads=num_heads, dff=dff, num_ops=num_ops, num_nodes=num_nodes,
+                                d_model=d_model, num_heads=num_heads,
+                                dff=dff, num_ops=num_ops, num_nodes=num_nodes,
                                 num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=0.)
     model((tf.random.normal(shape=(1, num_nodes, num_ops)), tf.random.normal(shape=(1, num_nodes, num_nodes))))
-    # model.load_weights('logs/phase2_model/modelTAE_weights_phase2')
-    model.load_weights('logs/350_50_192_finetuneTrue/ImageNet16-120/20230530-213427/modelGAE_weights_phase2')
-    datasets = train_valid_test_split_dataset(
-        NasBench201Dataset(start=0, end=15624, dataset=dataset, hp=str(200), seed=False),
-        ratio=[0.8, 0.1, 0.1],
-        shuffle=True,
-        shuffle_seed=0)
-
-    for key in datasets:
-        datasets[key].apply(OnlyValidAccTransform())
-        datasets[key].apply(OnlyFinalAcc())
-        datasets[key].apply(LabelScale(scale=0.01))
-
-    datasets['train'] = mask_graph_dataset(datasets['train'], 350, 1, random_seed=random_seed)
-    datasets['valid'] = mask_graph_dataset(datasets['valid'], 50, 1, random_seed=random_seed)
-    datasets['train'].filter(lambda g: not np.isnan(g.y))
-    datasets['valid'].filter(lambda g: not np.isnan(g.y))
+    model.load_weights('logs/350_50_192_finetuneTrue/nb101/20230531-103224/modelGAE_weights_phase2')
 
     # Eval inverse
     x = []
@@ -269,21 +291,16 @@ if __name__ == '__main__':
 
         for ops_idx, adj, query_acc in zip(ops_idx_lis, adj_list, label_acc[:, -1]):
             try:
-                ops_str_list = [OPS_by_IDX_201[i] for i in ops_idx]
-                # print(adj)
-                arch_str = ops_list_to_nb201_arch_str(ops_str_list)
-                # print(arch_str)
-
-                arch_idx = nb201api.query_index_by_arch(arch_str)
-
-                acc_list = [float(query_acc)]
-                data = nb201api.query_meta_info_by_index(arch_idx, hp='200').get_metrics(dataset, 'x-valid',
-                                                                                         iepoch=None, is_random=False)
-                acc = data['accuracy'] / 100.
+                if dataset_name != 'nb101':
+                    assert np.array_equal(adj, ADJACENCY)
+                    acc = query_acc_by_ops(ops_idx, dataset_name, is_random=False)
+                    ops_str_list = [OPS_by_IDX_201[i] for i in ops_idx]
+                else:
+                    adj_for_spec, ops_idx_for_spec = mask_padding_vertex_for_spec(adj, ops_idx)
+                    acc = nb101_dataset.get_metrics(adj_for_spec, ops_idx_for_spec)[1]  # [1] for valid acc
 
                 x.append(float(query_acc))
                 y.append(acc)
-                print(acc_list)  # [query_acc, 777_acc, 888_acc]
             except:
                 print('invalid')
                 invalid += 1
@@ -337,16 +354,14 @@ if __name__ == '__main__':
     ops_idx_lis, adj_list = inverse_from_acc(model, num_sample_z=1, x_dim=x_dim, z_dim=z_dim, to_inv_acc=to_inv)
     for ops_idx, adj, query_acc in zip(ops_idx_lis, adj_list, to_inv[:, -1]):
         try:
-            ops = [OPS_by_IDX_201[i] for i in ops_idx]
-            arch_str = ops_list_to_nb201_arch_str(ops)
-            print(arch_str)
+            if dataset_name != 'nb101':
+                assert np.array_equal(adj, ADJACENCY)
+                acc = query_acc_by_ops(ops_idx, dataset_name, is_random=False)
+            else:
+                adj_for_spec, ops_idx_for_spec = mask_padding_vertex_for_spec(adj, ops_idx)
+                acc = nb101_dataset.get_metrics(adj_for_spec, ops_idx_for_spec)[1]  # [1] for valid acc
 
-            idx = nb201api.query_index_by_arch(arch_str)
-
-            data = nb201api.query_meta_info_by_index(idx, hp='200').get_metrics(dataset, 'x-valid', iepoch=None,
-                                                                                is_random=False)
-            acc = data['accuracy'] / 100.
-            print(data['accuracy'])
+            print(acc)
             x.append(query_acc)
             y.append(acc)
         except:
