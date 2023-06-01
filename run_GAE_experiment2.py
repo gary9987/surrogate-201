@@ -8,15 +8,15 @@ import pickle
 
 
 if __name__ == '__main__':
-    train_sample_list = [50]
-    valid_sample_list = [10]
-    budget_list = [400]
-    dataset_name = 'cifar10-valid'  # cifar10-valid, cifar100, ImageNet16-120
+    train_sample_list = [50, 50, 50]
+    valid_sample_list = [50, 50, 50]
+    budget_list = [400, 400, 400]
+    dataset_names = ['cifar10-valid', 'cifar100', 'ImageNet16-120']  # cifar10-valid, cifar100, ImageNet16-120
     now_time = datetime.now().strftime("%Y%m%d-%H%M%S")
-    logdir = now_time + dataset_name +'_experiments_1NVP'
+    logdir = now_time + '_experiments_1NVP'
     os.makedirs(logdir, exist_ok=True)
 
-    for train_sample, valid_sample, budget in zip(train_sample_list, valid_sample_list, budget_list):
+    for dataset_name, train_sample, valid_sample, budget in zip(dataset_names, train_sample_list, valid_sample_list, budget_list):
         best_acc_list = []
         best_test_acc_list = []
         record_list = []

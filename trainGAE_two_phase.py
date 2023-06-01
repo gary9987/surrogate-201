@@ -459,8 +459,10 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     top_k = 5
     finetune = True
     retrain_finetune = True
+    is_rank_weight = True
+
     logdir, logger = get_logdir_and_logger(
-        os.path.join(f'{train_sample_amount}_{valid_sample_amount}_{query_budget}_finetune{finetune}',
+        os.path.join(f'{train_sample_amount}_{valid_sample_amount}_{query_budget}_finetune{finetune}_rank{is_rank_weight}',
                      dataset_name), f'trainGAE_two_phase_{seed}.log')
     random_seed = seed
     tf.random.set_seed(random_seed)
@@ -599,7 +601,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
 
         # Recreate Trainer for retrain
         retrain_model.set_weights(model.get_weights())
-        trainer = Trainer2(retrain_model, x_dim, y_dim, z_dim, finetune=retrain_finetune, is_rank_weight=True)
+        trainer = Trainer2(retrain_model, x_dim, y_dim, z_dim, finetune=retrain_finetune, is_rank_weight=is_rank_weight)
         trainer.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3), run_eagerly=False)
 
         # Reset the lr for retrain
