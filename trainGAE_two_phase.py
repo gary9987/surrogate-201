@@ -483,7 +483,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     is_only_validation_data = True
     train_phase = [0, 1]  # 0 not train, 1 train
     if dataset_name == 'nb101':
-        pretrained_weight = 'logs/nb101/nb101_phase1/modelGAE_weights_phase1'
+        pretrained_weight = 'logs/phase1_nb101/modelGAE_weights_phase1'
     else:
         pretrained_weight = 'logs/phase1_nb201/modelGAE_weights_phase1'
 
