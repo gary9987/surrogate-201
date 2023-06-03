@@ -16,10 +16,10 @@ from datasets.nb201_dataset import NasBench201Dataset, OP_PRIMITIVES_NB201
 from datasets.utils import train_valid_test_split_dataset, mask_graph_dataset, arch_list_to_set, graph_to_str, \
     repeat_graph_dataset_element
 from evalGAE import query_acc_by_ops, eval_query_best, nb101_dataset, query_tabular
-from trainGAE_two_phase import to_loader, mask_for_model, mask_for_spec
+from trainGAE_two_phase import to_loader, mask_for_model
 from utils.py_utils import get_logdir_and_logger
 from spektral.data import Graph, PackedBatchLoader
-from utils.tf_utils import to_undiredted_adj
+from utils.tf_utils import to_undiredted_adj, set_global_determinism
 import logging
 
 
@@ -569,10 +569,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     logdir, logger = get_logdir_and_logger(os.path.join(f'{train_sample_amount}_{valid_sample_amount}_{query_budget}_top{top_k}_ensemble_finetune{finetune}',
                                                         dataset_name), f'trainGAE_ensemble_{seed}.log')
     random_seed = seed
-    tf.random.set_seed(random_seed)
-    random.seed(random_seed)
-
-
+    set_global_determinism(random_seed)
 
     is_only_validation_data = True
     train_phase = [0, 1]  # 0 not train, 1 train

@@ -17,7 +17,7 @@ from spektral.data import PackedBatchLoader
 from evalGAE import eval_query_best, query_tabular
 from utils.py_utils import get_logdir_and_logger
 from spektral.data import Graph
-from utils.tf_utils import to_undiredted_adj
+from utils.tf_utils import to_undiredted_adj, set_global_determinism
 import logging
 
 
@@ -478,8 +478,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         os.path.join(f'{train_sample_amount}_{valid_sample_amount}_{query_budget}_finetune{finetune}_rank{is_rank_weight}',
                      dataset_name), f'trainGAE_two_phase_{seed}.log')
     random_seed = seed
-    tf.random.set_seed(random_seed)
-    random.seed(random_seed)
+    set_global_determinism(random_seed)
 
     is_only_validation_data = True
     train_phase = [0, 1]  # 0 not train, 1 train
