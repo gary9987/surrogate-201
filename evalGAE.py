@@ -235,8 +235,13 @@ if __name__ == '__main__':
         num_nodes = 8
         num_adjs = num_nodes ** 2
         label_epochs = 200
-        datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, dataset=dataset_name,
-                                                                     hp=str(label_epochs), seed=False),
+        if os.path.exists('datasets/NasBench201Dataset.cache'):
+            datasets = pickle.load(open('datasets/NasBench201Dataset.cache', 'rb'))
+        else:
+            datasets = NasBench201Dataset(start=0, end=15624, dataset=dataset_name, hp=str(label_epochs), seed=False)
+            with open('datasets/NasBench201Dataset.cache', 'wb') as f:
+                pickle.dump(datasets, f)
+        datasets = train_valid_test_split_dataset(datasets,
                                                   ratio=[0.8, 0.1, 0.1],
                                                   shuffle=True,
                                                   shuffle_seed=random_seed)

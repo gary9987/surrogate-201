@@ -614,8 +614,13 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         num_nodes = 8
         num_adjs = num_nodes ** 2
         label_epochs = 200
-        datasets = train_valid_test_split_dataset(NasBench201Dataset(start=0, end=15624, dataset=dataset_name,
-                                                                     hp=str(label_epochs), seed=False),
+        if os.path.exists('datasets/NasBench201Dataset.cache'):
+            datasets = pickle.load(open('datasets/NasBench201Dataset.cache', 'rb'))
+        else:
+            datasets = NasBench201Dataset(start=0, end=15624, dataset=dataset_name, hp=str(label_epochs), seed=False)
+            with open('datasets/NasBench201Dataset.cache', 'wb') as f:
+                pickle.dump(datasets, f)
+        datasets = train_valid_test_split_dataset(datasets,
                                                   ratio=[0.8, 0.1, 0.1],
                                                   shuffle=True,
                                                   shuffle_seed=random_seed)
@@ -642,6 +647,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         'n_hid_layer': 4,
         'n_hid_dim': 256,
         'name': 'NVP',
+        'num_couples': 1,
         'inp_dim': tot_dim
     }
 
