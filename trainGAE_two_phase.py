@@ -1,5 +1,4 @@
 import argparse
-import copy
 import pickle
 import random
 import numpy as np
@@ -11,14 +10,15 @@ from models.TransformerAE import TransformerAutoencoderNVP
 import tensorflow as tf
 import os
 from datasets.nb201_dataset import NasBench201Dataset, OP_PRIMITIVES_NB201
-from datasets.nb101_dataset import NasBench101Dataset, OP_PRIMITIVES_NB101, mask_for_spec, mask_for_model
+from datasets.nb101_dataset import NasBench101Dataset, OP_PRIMITIVES_NB101, mask_for_model
 from datasets.utils import train_valid_test_split_dataset, mask_graph_dataset, arch_list_to_set, graph_to_str, \
     repeat_graph_dataset_element
 from spektral.data import PackedBatchLoader
-from evalGAE import eval_query_best, query_acc_by_ops, query_tabular
+from evalGAE import eval_query_best, query_tabular
 from utils.py_utils import get_logdir_and_logger
 from spektral.data import Graph
 from utils.tf_utils import to_undiredted_adj
+import logging
 
 
 def parse_args():
@@ -28,6 +28,16 @@ def parse_args():
     parser.add_argument('--query_budget', type=int, default=192)
     parser.add_argument('--dataset', type=str, default='cifar10-valid',
                         help='Could be nb101, cifar10-valid, cifar100, ImageNet16-120')
+    parser.add_argument('--top_k', type=int, default=5)
+    parser.add_argument('--finetune', action='store_true')
+    parser.add_argument('--no_finetune', dest='finetune', action='store_false')
+    parser.set_defaults(finetune=True)
+    parser.add_argument('--retrain_finetune', action='store_true')
+    parser.add_argument('--no_retrain_finetune', dest='retrain_finetune', action='store_false')
+    parser.set_defaults(retrain_finetune=True)
+    parser.add_argument('--rank_weight', action='store_true')
+    parser.add_argument('--no_rank_weight', dest='rank_weight', action='store_false')
+    parser.set_defaults(rank_weight=True)
     parser.add_argument('--seed', type=int, default=0)
     return parser.parse_args()
 
@@ -35,8 +45,8 @@ def parse_args():
 def cal_ops_adj_loss_for_graph(x_batch_train, ops_cls, adj_cls):
     ops_label, adj_label = x_batch_train
     # adj_label = tf.reshape(adj_label, [tf.shape(adj_label)[0], -1])
-    # ops_loss = tf.keras.losses.CategoricalCrossentropy(from_logits=False)(ops_label, ops_cls)
-    ops_loss = tf.keras.losses.KLDivergence()(ops_label, ops_cls)
+    ops_loss = tf.keras.losses.CategoricalCrossentropy(from_logits=False)(ops_label, ops_cls)
+    #ops_loss = tf.keras.losses.KLDivergence()(ops_label, ops_cls)
     adj_loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)(adj_label, adj_cls)
     return ops_loss, adj_loss
 
@@ -318,6 +328,7 @@ def to_loader(datasets, batch_size: int, epochs: int):
 
 
 def sample_arch_candidates(model, dataset_name, x_dim, z_dim, visited, sample_amount=200):
+    logger = logging.getLogger(__name__)
     found_arch_list_set = []
     max_retry = 10
     std_idx = 0
@@ -337,6 +348,8 @@ def sample_arch_candidates(model, dataset_name, x_dim, z_dim, visited, sample_am
             found_arch_list_set.extend(found_arch_list)
             found_arch_list_set = arch_list_to_set(found_arch_list_set)
             retry += 1
+
+        logger.info(f'std scale {noise_std_list[std_idx]}, num sample {len(found_arch_list_set)}')
         std_idx += 1
 
     # if retry == max_retry and len(found_arch_list_set) < sample_amount:
@@ -371,7 +384,7 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, l
     # Generate total 200 architectures
     visited = {graph_to_str(i): i.y.tolist() for i in datasets['train'].graphs if not np.isnan(i.y).any()}
     found_arch_list_set = sample_arch_candidates(trainer.model, dataset_name, trainer.x_dim, trainer.z_dim, visited,
-                                                 sample_amount=200)
+                                                 sample_amount=100)
 
     num_new_found = 0
     # Predict accuracy by INN (performance predictor)
@@ -455,11 +468,11 @@ def prepare_model(nvp_config, latent_dim, num_layers, d_model, num_heads, dff, n
     return pretrained_model, model, retrain_model
 
 
-def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_budget):
-    top_k = 5
-    finetune = True
-    retrain_finetune = True
-    is_rank_weight = True
+def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_budget, top_k, finetune, retrain_finetune, is_rank_weight):
+    #top_k = 5
+    #finetune = True
+    #retrain_finetune = True
+    #is_rank_weight = True
 
     logdir, logger = get_logdir_and_logger(
         os.path.join(f'{train_sample_amount}_{valid_sample_amount}_{query_budget}_finetune{finetune}_rank{is_rank_weight}',
@@ -473,7 +486,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     if dataset_name == 'nb101':
         pretrained_weight = 'logs/nb101/nb101_phase1/modelGAE_weights_phase1'
     else:
-        pretrained_weight = 'logs/phase1_model_cifar100/modelGAE_weights_phase1'
+        pretrained_weight = 'logs/phase1_nb201/modelGAE_weights_phase1'
 
     eps_scale = 0.05  # 0.1
     d_model = 32
@@ -533,8 +546,9 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     nvp_config = {
         'n_couple_layer': 4,
         'n_hid_layer': 4,
-        'n_hid_dim': 256,
+        'n_hid_dim': 128,
         'name': 'NVP',
+        'num_couples': 2,
         'inp_dim': tot_dim
     }
 
@@ -596,9 +610,9 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
                      EarlyStopping(monitor='val_total_loss', patience=patience, restore_best_weights=True)]
         trainer = train(2, model, loader, train_epochs, logdir, callbacks,
                         x_dim=x_dim, y_dim=y_dim, z_dim=z_dim, finetune=finetune)
-        # results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
-        # logger.info(str(dict(zip(trainer.metrics_names, results))))
-
+        results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
+        logger.info(str(dict(zip(trainer.metrics_names, results))))
+        #exit()
         # Recreate Trainer for retrain
         retrain_model.set_weights(model.get_weights())
         trainer = Trainer2(retrain_model, x_dim, y_dim, z_dim, finetune=retrain_finetune, is_rank_weight=is_rank_weight)
@@ -647,4 +661,5 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
 
 if __name__ == '__main__':
     args = parse_args()
-    main(args.seed, args.dataset, args.train_sample_amount, args.valid_sample_amount, args.query_budget)
+    main(args.seed, args.dataset, args.train_sample_amount, args.valid_sample_amount, args.query_budget,
+         args.top_k, args.finetune, args.retrain_finetune, args.rank_weight)

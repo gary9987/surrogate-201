@@ -213,6 +213,7 @@ if __name__ == '__main__':
 
     dataset_name = 'cifar10-valid'
     plot_on_slit = 'train'  # train, valid, test
+    model_weight = 'logs/for_tsne/20230603-141711/modelGAE_weights_retrain'
 
     if dataset_name == 'nb101':
         num_ops = len(OP_PRIMITIVES_NB101)  # 5
@@ -268,8 +269,9 @@ if __name__ == '__main__':
     nvp_config = {
         'n_couple_layer': 4,
         'n_hid_layer': 4,
-        'n_hid_dim': 256,
+        'n_hid_dim': 128,
         'name': 'NVP',
+        'num_couples': 2,
         'inp_dim': tot_dim
     }
 
@@ -278,7 +280,7 @@ if __name__ == '__main__':
                                 dff=dff, num_ops=num_ops, num_nodes=num_nodes,
                                 num_adjs=num_adjs, dropout_rate=dropout_rate, eps_scale=0.)
     model((tf.random.normal(shape=(1, num_nodes, num_ops)), tf.random.normal(shape=(1, num_nodes, num_nodes))))
-    model.load_weights('logs/350_50_192_finetuneTrue/nb101/20230531-103224/modelGAE_weights_phase2')
+    model.load_weights(model_weight)
 
     # Eval inverse
     x = []

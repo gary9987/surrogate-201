@@ -178,7 +178,7 @@ class TwoNVPCouplingLayers(tfkl.Layer):
 
 
 class NVP(tfk.Model):
-    def __init__(self, inp_dim, n_couple_layer, n_hid_layer, n_hid_dim, name, shuffle_type='reverse', use_bias=True):
+    def __init__(self, inp_dim, n_couple_layer, n_hid_layer, n_hid_dim, name, num_couples, shuffle_type='reverse', use_bias=True):
         super(NVP, self).__init__(name=name)
         self.inp_dim = inp_dim
         self.n_couple_layer = n_couple_layer
@@ -187,9 +187,15 @@ class NVP(tfk.Model):
         self.shuffle_type = shuffle_type
         self.AffineLayers = []
         for i in range(n_couple_layer):
-            layer = NVPCouplingLayer(
-                inp_dim, n_hid_layer, n_hid_dim,
-                name=f'Layer{i}', shuffle_type=shuffle_type, use_bias=use_bias)
+            if num_couples == 1:
+                layer = NVPCouplingLayer(inp_dim, n_hid_layer, n_hid_dim,
+                    name=f'Layer{i}', shuffle_type=shuffle_type, use_bias=use_bias)
+            elif num_couples == 2:
+                layer = TwoNVPCouplingLayers(inp_dim, n_hid_layer, n_hid_dim,
+                    name=f'Layer{i}', shuffle_type=shuffle_type, use_bias=use_bias)
+            else:
+                raise ValueError('num_couples must be 1 or 2')
+
             self.AffineLayers.append(layer)
 
     def call(self, x):

@@ -36,8 +36,8 @@ def parse_args():
 def cal_ops_adj_loss_for_graph(x_batch_train, ops_cls, adj_cls):
     ops_label, adj_label = x_batch_train
     #adj_label = tf.reshape(adj_label, [tf.shape(adj_label)[0], -1])
-    #ops_loss = tf.keras.losses.CategoricalCrossentropy(from_logits=False)(ops_label, ops_cls)
-    ops_loss = tf.keras.losses.KLDivergence()(ops_label, ops_cls)
+    ops_loss = tf.keras.losses.CategoricalCrossentropy(from_logits=False)(ops_label, ops_cls)
+    #ops_loss = tf.keras.losses.KLDivergence()(ops_label, ops_cls)
     adj_loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)(adj_label, adj_cls)
     return ops_loss, adj_loss
 
@@ -579,7 +579,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     if dataset_name == 'nb101':
         pretrained_weight = 'logs/nb101/nb101_phase1/modelGAE_weights_phase1'
     else:
-        pretrained_weight = 'logs/phase1_model_cifar100/modelGAE_weights_phase1'
+        pretrained_weight = 'logs/phase1_nb201/modelGAE_weights_phase1'
 
     eps_scale = 0.05  # 0.1
     d_model = 32
