@@ -1,4 +1,5 @@
 import argparse
+import copy
 import pickle
 import random
 import numpy as np
@@ -330,11 +331,12 @@ def to_loader(datasets, batch_size: int, epochs: int):
 def sample_arch_candidates(model, dataset_name, x_dim, z_dim, visited, sample_amount=200):
     logger = logging.getLogger(__name__)
     found_arch_list_set = []
+    visited_arch = []
     max_retry = 10
     std_idx = 0
-    noise_std_list = [0.0, 1e-5, 5e-5, 1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 0.1]
-    amount_scale_list = [1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.2, 2.4, 2.8, 3.0]
-    while len(found_arch_list_set) < sample_amount and std_idx < max_retry:
+    noise_std_list = [0.0, 1e-5, 5e-5, 1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 0.1, 0.2]
+    amount_scale_list = [1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.2, 2.4, 2.8, 3.0, 3.0]
+    while len(found_arch_list_set) < sample_amount and std_idx < len(noise_std_list):
         retry = 0
         while len(found_arch_list_set) < sample_amount and retry < max_retry:
             _, _, _, found_arch_list = eval_query_best(model, dataset_name, x_dim, z_dim,
@@ -344,9 +346,15 @@ def sample_arch_candidates(model, dataset_name, x_dim, z_dim, visited, sample_am
                 found_arch_list = list(map(mask_for_model, found_arch_list))
                 found_arch_list = list(filter(lambda arch: arch is not None and arch['x'] is not None, found_arch_list))
 
-            found_arch_list = list(filter(lambda arch: graph_to_str(arch) not in visited, found_arch_list))
-            found_arch_list_set.extend(found_arch_list)
-            found_arch_list_set = arch_list_to_set(found_arch_list_set)
+            found_in_this_round = list(filter(lambda arch: graph_to_str(arch) not in visited_arch and graph_to_str(arch) not in visited, found_arch_list))
+            found_in_this_round = arch_list_to_set(found_in_this_round)
+
+            if len(found_in_this_round) + len(found_arch_list_set) > sample_amount:
+                random.shuffle(found_in_this_round)
+                found_in_this_round = found_in_this_round[: sample_amount - len(found_arch_list_set)]
+
+            found_arch_list_set.extend(found_in_this_round)
+            visited_arch.extend(list(map(graph_to_str, found_in_this_round)))
             retry += 1
 
         logger.info(f'std scale {noise_std_list[std_idx]}, num sample {len(found_arch_list_set)}')
@@ -356,11 +364,6 @@ def sample_arch_candidates(model, dataset_name, x_dim, z_dim, visited, sample_am
     #    model.set_weights_from_self_ckpt()
     #    logging.getLogger(__name__).info('Reset model weights')
     #    return None
-
-    if len(found_arch_list_set) > sample_amount:
-        # shuffle found_arch_list_set
-        random.shuffle(found_arch_list_set)
-        found_arch_list_set = found_arch_list_set[:sample_amount]
 
     return found_arch_list_set
 
@@ -438,8 +441,8 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, l
                 steps_per_epoch=loader['train'].steps_per_epoch,
                 validation_steps=loader['valid'].steps_per_epoch)
 
-    # results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
-    # logger.info(str(dict(zip(trainer.metrics_names, results))))
+    results = trainer.evaluate(loader['test'].load(), steps=loader['test'].steps_per_epoch)
+    logger.info(str(dict(zip(trainer.metrics_names, results))))
 
     return top_acc_list, top_test_acc_list, found_arch_list_set, num_new_found
 
@@ -483,9 +486,9 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     is_only_validation_data = True
     train_phase = [0, 1]  # 0 not train, 1 train
     if dataset_name == 'nb101':
-        pretrained_weight = 'logs/phase1_nb101/modelGAE_weights_phase1'
+        pretrained_weight = 'logs/phase1_nb101_CE_64/modelGAE_weights_phase1'
     else:
-        pretrained_weight = 'logs/phase1_nb201/modelGAE_weights_phase1'
+        pretrained_weight = 'logs/phase1_nb201_CE_64/modelGAE_weights_phase1'
 
     eps_scale = 0.05  # 0.1
     d_model = 32
@@ -495,10 +498,6 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     num_heads = 3
 
     latent_dim = 16
-
-    train_epochs = 500
-    retrain_epochs = 50
-    patience = 50
 
     if dataset_name == 'nb101':
         num_ops = len(OP_PRIMITIVES_NB101)  # 5
@@ -520,11 +519,11 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         num_nodes = 8
         num_adjs = num_nodes ** 2
         label_epochs = 200
-        if os.path.exists('datasets/NasBench201Dataset.cache'):
-            datasets = pickle.load(open('datasets/NasBench201Dataset.cache', 'rb'))
+        if os.path.exists(f'datasets/NasBench201Dataset_{dataset_name}.cache'):
+            datasets = pickle.load(open(f'datasets/NasBench201Dataset_{dataset_name}.cache', 'rb'))
         else:
             datasets = NasBench201Dataset(start=0, end=15624, dataset=dataset_name, hp=str(label_epochs), seed=False)
-            with open('datasets/NasBench201Dataset.cache', 'wb') as f:
+            with open(f'datasets/NasBench201Dataset_{dataset_name}.cache', 'wb') as f:
                 pickle.dump(datasets, f)
         datasets = train_valid_test_split_dataset(datasets,
                                                   ratio=[0.8, 0.1, 0.1],
@@ -564,11 +563,20 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
 
     if train_phase[0]:
         logger.info('Train phase 1')
-        batch_size = 256
+        train_epochs = 1000
+        patience = 100
+        batch_size = 64
+        '''
+        pretrained_datasets = copy.deepcopy(datasets)
+        pretrained_datasets['train'] = mask_graph_dataset(pretrained_datasets['train'], int(42362 * 0.9), 1, random_seed=random_seed)
+        pretrained_datasets['valid'] = mask_graph_dataset(pretrained_datasets['valid'], int(42362 * 0.1), 1, random_seed=random_seed)
+        pretrained_datasets['train'].filter(lambda g: not np.isnan(g.y))
+        pretrained_datasets['valid'].filter(lambda g: not np.isnan(g.y))
+        '''
         loader = to_loader(datasets, batch_size, train_epochs)
         callbacks = [CSVLogger(os.path.join(logdir, "learning_curve_phase1.csv")),
-                     tf.keras.callbacks.ReduceLROnPlateau(monitor='val_rec_loss', factor=0.1, patience=50, verbose=1,
-                                                          min_lr=1e-5),
+                     tf.keras.callbacks.ReduceLROnPlateau(monitor='val_rec_loss', factor=0.1, patience=patience // 2,
+                                                          verbose=1, min_lr=1e-5),
                      tensorboard_callback,
                      EarlyStopping(monitor='val_rec_loss', patience=patience, restore_best_weights=True)]
         trainer = train(1, pretrained_model, loader, train_epochs, logdir, callbacks)
@@ -588,6 +596,9 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
 
     if train_phase[1]:
         batch_size = 64
+        train_epochs = 500
+        retrain_epochs = 50
+        patience = 50
         repeat_label = 20
         now_queried = train_sample_amount + valid_sample_amount
         logger.info('Train phase 2')

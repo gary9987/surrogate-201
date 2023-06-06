@@ -16,7 +16,7 @@ from nats_bench import create
 import matplotlib.pyplot as plt
 from spektral.data import BatchLoader
 import matplotlib as mpl
-from utils.tf_utils import to_undiredted_adj
+from utils.tf_utils import to_undiredted_adj, set_global_determinism
 
 nb201api = create(None, 'tss', fast_mode=True, verbose=False)
 nb101_dataset = NasBench101Dataset(end=0)
@@ -208,8 +208,9 @@ def query_tabular(dataset_name: str, archs: Union[List, spektral.data.Dataset]):
 if __name__ == '__main__':
     mpl.rcParams['figure.dpi'] = 300
     random_seed = 0
-    np.random.seed(random_seed)
-    tf.random.set_seed(random_seed)
+    set_global_determinism(random_seed)
+    #random.seed(random_seed)
+    #tf.random.set_seed(random_seed)
 
     dataset_name = 'cifar10-valid'
     plot_on_slit = 'train'  # train, valid, test
@@ -235,11 +236,11 @@ if __name__ == '__main__':
         num_nodes = 8
         num_adjs = num_nodes ** 2
         label_epochs = 200
-        if os.path.exists('datasets/NasBench201Dataset.cache'):
-            datasets = pickle.load(open('datasets/NasBench201Dataset.cache', 'rb'))
+        if os.path.exists(f'datasets/NasBench201Dataset_{dataset_name}.cache'):
+            datasets = pickle.load(open(f'datasets/NasBench201Dataset_{dataset_name}.cache', 'rb'))
         else:
             datasets = NasBench201Dataset(start=0, end=15624, dataset=dataset_name, hp=str(label_epochs), seed=False)
-            with open('datasets/NasBench201Dataset.cache', 'wb') as f:
+            with open(f'datasets/NasBench201Dataset_{dataset_name}.cache', 'wb') as f:
                 pickle.dump(datasets, f)
         datasets = train_valid_test_split_dataset(datasets,
                                                   ratio=[0.8, 0.1, 0.1],
