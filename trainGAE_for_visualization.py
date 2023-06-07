@@ -322,9 +322,9 @@ def sample_arch_candidates(model, dataset_name, x_dim, z_dim, visited, sample_am
     found_arch_list_set = []
     max_retry = 10
     std_idx = 0
-    noise_std_list = [0.0, 1e-5, 5e-5, 1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 0.1]
-    amount_scale_list = [1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.2, 2.4, 2.8, 3.0]
-    while len(found_arch_list_set) < sample_amount and std_idx < max_retry:
+    noise_std_list = [0.0, 1e-5, 5e-5, 1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 0.1, 0.2]
+    amount_scale_list = [1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.2, 2.4, 2.8, 3.0, 3.0]
+    while len(found_arch_list_set) < sample_amount and std_idx < len(noise_std_list):
         retry = 0
         while len(found_arch_list_set) < sample_amount and retry < max_retry:
             _, _, _, found_arch_list = eval_query_best(model, dataset_name, x_dim, z_dim,
@@ -340,6 +340,7 @@ def sample_arch_candidates(model, dataset_name, x_dim, z_dim, visited, sample_am
             if len(found_arch_list_set) > sample_amount:
                 found_arch_list_set = found_arch_list_set[:sample_amount]
             retry += 1
+
         logger.info(f'std scale {noise_std_list[std_idx]}, num sample {len(found_arch_list_set)}')
         std_idx += 1
 
@@ -465,8 +466,8 @@ def prepare_model(nvp_config, latent_dim, num_layers, d_model, num_heads, dff, n
 
 def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_budget):
     top_k = 5
-    finetune = True
-    retrain_finetune = True
+    finetune = False
+    retrain_finetune = False
     is_rank_weight = True
 
     logdir, logger = get_logdir_and_logger(
@@ -478,7 +479,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     is_only_validation_data = True
     train_phase = [0, 1]  # 0 not train, 1 train
     if dataset_name == 'nb101':
-        pretrained_weight = 'logs/nb101/nb101_phase1/modelGAE_weights_phase1'
+        pretrained_weight = 'logs/phase1_nb101_CE_64/modelGAE_weights_phase1'
     else:
         pretrained_weight = 'logs/phase1_nb201_CE_64/modelGAE_weights_phase1'
 
