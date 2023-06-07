@@ -337,6 +337,8 @@ def sample_arch_candidates(model, dataset_name, x_dim, z_dim, visited, sample_am
             #found_arch_list = list(filter(lambda arch: graph_to_str(arch) not in visited, found_arch_list))
             found_arch_list_set.extend(found_arch_list)
             found_arch_list_set = arch_list_to_set(found_arch_list_set)
+            if len(found_arch_list_set) > sample_amount:
+                found_arch_list_set = found_arch_list_set[:sample_amount]
             retry += 1
         logger.info(f'std scale {noise_std_list[std_idx]}, num sample {len(found_arch_list_set)}')
         std_idx += 1
@@ -345,11 +347,6 @@ def sample_arch_candidates(model, dataset_name, x_dim, z_dim, visited, sample_am
     #    model.set_weights_from_self_ckpt()
     #    logging.getLogger(__name__).info('Reset model weights')
     #    return None
-
-    if len(found_arch_list_set) > sample_amount:
-        # shuffle found_arch_list_set
-        random.shuffle(found_arch_list_set)
-        found_arch_list_set = found_arch_list_set[:sample_amount]
 
     return found_arch_list_set
 
@@ -473,7 +470,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     is_rank_weight = True
 
     logdir, logger = get_logdir_and_logger(
-        os.path.join(f'{train_sample_amount}_{valid_sample_amount}_{query_budget}_finetune{finetune}_rank{is_rank_weight}',
+        os.path.join(f'search_visualization_{dataset_name}_finetune{finetune}_rank{is_rank_weight}',
                      dataset_name), f'trainGAE_for_visualization_{seed}.log')
     random_seed = seed
     set_global_determinism(random_seed)
@@ -483,7 +480,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     if dataset_name == 'nb101':
         pretrained_weight = 'logs/nb101/nb101_phase1/modelGAE_weights_phase1'
     else:
-        pretrained_weight = 'logs/phase1_nb201/modelGAE_weights_phase1'
+        pretrained_weight = 'logs/phase1_nb201_CE_64/modelGAE_weights_phase1'
 
     eps_scale = 0.05  # 0.1
     d_model = 32
@@ -641,6 +638,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
             logger.info(f'History top 5 test acc: {sorted(global_top_test_acc_list, reverse=True)[:5]}')
             # if patience_cot >= patience:
             #    break
+            retrain_model.save_weights(os.path.join(logdir, f'modelGAE_weights_retrain_{run}'))
 
             target_acc = {'cifar10-valid': 0.9160, 'cifar100': 0.7349}
             if max(global_top_acc_list) > target_acc.get(dataset_name, 1.0):
