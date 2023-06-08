@@ -11,6 +11,7 @@ if __name__ == '__main__':
     finetune = True
     retrain_finetune = True
     is_rank_weight = True
+    random_sample = False
     train_sample_list = [50, 50, 50]
     valid_sample_list = [50, 50, 50]
     budget_list = [400, 400, 400]
@@ -29,7 +30,8 @@ if __name__ == '__main__':
                                                    train_sample_amount=train_sample,
                                                    valid_sample_amount=valid_sample,
                                                    query_budget=budget, top_k=top_k, finetune=finetune,
-                                                   retrain_finetune=retrain_finetune, is_rank_weight=is_rank_weight)
+                                                   retrain_finetune=retrain_finetune, is_rank_weight=is_rank_weight,
+                                                   random_sample=random_sample)
             best_acc_list.append(best_acc)
             best_test_acc_list.append(best_test_acc)
             record_list.append(record)

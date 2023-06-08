@@ -39,16 +39,25 @@ def parse_args():
     parser.add_argument('--rank_weight', action='store_true')
     parser.add_argument('--no_rank_weight', dest='rank_weight', action='store_false')
     parser.set_defaults(rank_weight=True)
+    parser.add_argument('--random_sample', action='store_true')
+    parser.set_defaults(random_sample=False)
     parser.add_argument('--seed', type=int, default=0)
     return parser.parse_args()
 
 
-def cal_ops_adj_loss_for_graph(x_batch_train, ops_cls, adj_cls):
+def cal_ops_adj_loss_for_graph(x_batch_train, ops_cls, adj_cls, reduction='auto', rank_weight=None):
     ops_label, adj_label = x_batch_train
     # adj_label = tf.reshape(adj_label, [tf.shape(adj_label)[0], -1])
-    ops_loss = tf.keras.losses.CategoricalCrossentropy(from_logits=False)(ops_label, ops_cls)
+    ops_loss = tf.keras.losses.CategoricalCrossentropy(from_logits=False, reduction=reduction)(ops_label, ops_cls)
     #ops_loss = tf.keras.losses.KLDivergence()(ops_label, ops_cls)
-    adj_loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)(adj_label, adj_cls)
+    adj_loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False, reduction=reduction)(adj_label, adj_cls)
+    if reduction == 'none':
+        ops_loss = tf.reduce_mean(ops_loss, axis=-1)
+        adj_loss = tf.reduce_mean(adj_loss, axis=-1)
+    if rank_weight is not None:
+        ops_loss = tf.reduce_sum(tf.multiply(ops_loss, rank_weight))
+        adj_loss = tf.reduce_sum(tf.multiply(adj_loss, rank_weight))
+
     return ops_loss, adj_loss
 
 
@@ -129,13 +138,13 @@ class Trainer2(tf.keras.Model):
         self.w3 = 10.
 
         if self.is_rank_weight:
-            reduction = 'none'
+            self.reduction = 'none'
         else:
-            reduction = 'auto'
+            self.reduction = 'auto'
 
-        self.reg_loss_fn = tf.keras.losses.MeanSquaredError(reduction=reduction)
+        self.reg_loss_fn = tf.keras.losses.MeanSquaredError(reduction=self.reduction)
         self.loss_latent = MMD_multiscale
-        self.loss_backward = tf.keras.losses.MeanSquaredError(reduction=reduction)
+        self.loss_backward = tf.keras.losses.MeanSquaredError(reduction=self.reduction)
         self.loss_tracker = {
             'total_loss': tf.keras.metrics.Mean(name="total_loss"),
             'reg_loss': tf.keras.metrics.Mean(name="reg_loss"),
@@ -211,7 +220,7 @@ class Trainer2(tf.keras.Model):
             forward_loss = self.w1 * reg_loss + self.w2 * latent_loss
             rec_loss = 0.
             if self.finetune:
-                ops_loss, adj_loss = cal_ops_adj_loss_for_graph(x_batch_train, ops_cls, adj_cls)
+                ops_loss, adj_loss = cal_ops_adj_loss_for_graph(x_batch_train, ops_cls, adj_cls, self.reduction, rank_weight)
                 rec_loss = self.ops_weight * ops_loss + self.adj_weight * adj_loss + self.kl_weight * kl_loss
                 forward_loss += rec_loss
 
@@ -265,7 +274,7 @@ class Trainer2(tf.keras.Model):
                            lambda: 0.)
         backward_loss = self.w3 * rev_loss
         if self.finetune:
-            ops_loss, adj_loss = cal_ops_adj_loss_for_graph(x_batch_train, ops_cls, adj_cls)
+            ops_loss, adj_loss = cal_ops_adj_loss_for_graph(x_batch_train, ops_cls, adj_cls, self.reduction, rank_weight)
             rec_loss = self.ops_weight * ops_loss + self.adj_weight * adj_loss + self.kl_weight * kl_loss
             forward_loss += rec_loss
 
@@ -328,6 +337,49 @@ def to_loader(datasets, batch_size: int, epochs: int):
     return loader
 
 
+class RandomArchGenerator:
+    def __init__(self, dataset_name, is_only_validation_data):
+        if dataset_name == 'nb101':
+            if os.path.exists('datasets/NasBench101Dataset.cache'):
+                self.datasets = pickle.load(open('datasets/NasBench101Dataset.cache', 'rb'))
+            else:
+                self.datasets = NasBench101Dataset(start=0, end=423623)
+                with open('datasets/NasBench101Dataset.cache', 'wb') as f:
+                    pickle.dump(self.datasets, f)
+        else:
+            if os.path.exists(f'datasets/NasBench201Dataset_{dataset_name}.cache'):
+                self.datasets = pickle.load(open(f'datasets/NasBench201Dataset_{dataset_name}.cache', 'rb'))
+            else:
+                self.datasets = NasBench201Dataset(start=0, end=15624, dataset=dataset_name, hp=str(200),
+                                              seed=False)
+                with open(f'datasets/NasBench201Dataset_{dataset_name}.cache', 'wb') as f:
+                    pickle.dump(self.datasets, f)
+
+        if is_only_validation_data:
+            self.datasets.apply(OnlyValidAccTransform())
+            self.datasets.apply(OnlyFinalAcc())
+            if dataset_name != 'nb101':
+                self.datasets.apply(LabelScale(scale=0.01))
+        else:
+            self.datasets.apply(ReshapeYTransform())
+
+    def random_sample(self, visited, sample_amount):
+        cand = []
+        visited_arch = []
+        while len(cand) < sample_amount:
+            graphs = np.random.choice(self.datasets, sample_amount - len(cand), replace=False)
+            found_arch_list = [{'x': g.x.astype(np.float32), 'a': g.a.astype(np.float32), 'y': g.y.reshape([1]).astype(np.float32)} for g in graphs]
+            found_arch_list = list(
+                filter(lambda arch: graph_to_str(arch) not in visited_arch and graph_to_str(arch) not in visited,
+                       found_arch_list))
+            cand.extend(found_arch_list)
+            visited_arch.extend(list(map(graph_to_str, found_arch_list)))
+
+        return cand
+
+
+random_arch_generator: RandomArchGenerator = None
+
 def sample_arch_candidates(model, dataset_name, x_dim, z_dim, visited, sample_amount=200):
     logger = logging.getLogger(__name__)
     found_arch_list_set = []
@@ -383,11 +435,14 @@ def predict_arch_acc(found_arch_list_set, model):
             found_arch_list_set[i]['y'] = reg[i][-1].numpy()
 
 
-def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, logger, repeat, top_k=5):
+def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, logger, repeat, top_k=5, random_sample=False):
     # Generate total 200 architectures
     visited = {graph_to_str(i): i.y.tolist() for i in datasets['train'].graphs if not np.isnan(i.y).any()}
-    found_arch_list_set = sample_arch_candidates(trainer.model, dataset_name, trainer.x_dim, trainer.z_dim, visited,
-                                                 sample_amount=100)
+    if random_sample:
+        found_arch_list_set = random_arch_generator.random_sample(visited, sample_amount=100)
+    else:
+        found_arch_list_set = sample_arch_candidates(trainer.model, dataset_name, trainer.x_dim, trainer.z_dim, visited,
+                                                     sample_amount=100)
 
     num_new_found = 0
     # Predict accuracy by INN (performance predictor)
@@ -471,14 +526,14 @@ def prepare_model(nvp_config, latent_dim, num_layers, d_model, num_heads, dff, n
     return pretrained_model, model, retrain_model
 
 
-def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_budget, top_k, finetune, retrain_finetune, is_rank_weight):
+def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_budget, top_k, finetune, retrain_finetune, is_rank_weight, random_sample):
     #top_k = 5
     #finetune = True
     #retrain_finetune = True
     #is_rank_weight = True
 
     logdir, logger = get_logdir_and_logger(
-        os.path.join(f'{train_sample_amount}_{valid_sample_amount}_{query_budget}_finetune{finetune}_rank{is_rank_weight}',
+        os.path.join(f'{train_sample_amount}_{valid_sample_amount}_{query_budget}_finetune{finetune}_rfinetune{retrain_finetune}_rank{is_rank_weight}',
                      dataset_name), f'trainGAE_two_phase_{seed}.log')
     random_seed = seed
     set_global_determinism(random_seed)
@@ -539,6 +594,9 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         else:
             datasets[key].apply(ReshapeYTransform())
 
+    global random_arch_generator
+    random_arch_generator = RandomArchGenerator(dataset_name, is_only_validation_data)
+
     x_dim = latent_dim * num_nodes
     y_dim = 1  # 1
     z_dim = x_dim - 1  # 127
@@ -563,7 +621,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
 
     if train_phase[0]:
         logger.info('Train phase 1')
-        train_epochs = 1000
+        train_epochs = 500
         patience = 100
         batch_size = 64
         '''
@@ -640,7 +698,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
             logger.info(f'Retrain run {run}')
             top_acc_list, top_test_acc_list, top_arch_list, num_new_found = retrain(trainer, datasets, dataset_name,
                                                                                     batch_size, retrain_epochs, logdir,
-                                                                                    logger, repeat_label, top_k)
+                                                                                    logger, repeat_label, top_k, random_sample)
             now_queried += num_new_found
             logger.info('Now queried: ' + str(now_queried))
 
@@ -660,10 +718,15 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
             # if patience_cot >= patience:
             #    break
 
-            target_acc = {'cifar10-valid': 0.9160, 'cifar100': 0.7349}
-            if max(global_top_acc_list) > target_acc.get(dataset_name, 1.0):
-                logger.info(f'Find optimal query amount {now_queried}')
-                break
+            target_acc = {'cifar10-valid': 0.9160, 'cifar100': 0.7349, 'ImageNet16-120': [0.4673, 0.4731], 'nb101': 0.9505}
+            if dataset_name == 'ImageNet16-120':
+                if max(global_top_acc_list) > target_acc.get(dataset_name, 1.0)[0] and max(global_top_test_acc_list) > target_acc.get(dataset_name, 1.0)[1]:
+                    logger.info(f'Find optimal query amount {now_queried}')
+                    break
+            else:
+                if max(global_top_acc_list) > target_acc.get(dataset_name, 1.0):
+                    logger.info(f'Find optimal query amount {now_queried}')
+                    break
     else:
         model.load_weights(pretrained_weight)
 
@@ -677,4 +740,4 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
 if __name__ == '__main__':
     args = parse_args()
     main(args.seed, args.dataset, args.train_sample_amount, args.valid_sample_amount, args.query_budget,
-         args.top_k, args.finetune, args.retrain_finetune, args.rank_weight)
+         args.top_k, args.finetune, args.retrain_finetune, args.rank_weight, args.random_sample)
