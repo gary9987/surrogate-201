@@ -15,9 +15,9 @@ if __name__ == '__main__':
     train_sample_list = [50, 50, 50]
     valid_sample_list = [50, 50, 50]
     budget_list = [400, 400, 400]
-    dataset_names = ['cifar10-valid', 'cifar100', 'ImageNet16-120']  # cifar10-valid, cifar100, ImageNet16-120
+    dataset_names = ['cifar10-valid', 'cifar100', 'ImageNet16-120']  # 'cifar10-valid', 'cifar100', 'ImageNet16-120'
     now_time = datetime.now().strftime("%Y%m%d-%H%M%S")
-    logdir = now_time + f'_finetune{finetune}_rank{is_rank_weight}_experiments_1NVP'
+    logdir = now_time + f'_finetune{finetune}_rfinetune{retrain_finetune}_rank{is_rank_weight}_randomS{random_sample}_1NVP'
     os.makedirs(logdir, exist_ok=True)
 
     for dataset_name, train_sample, valid_sample, budget in zip(dataset_names, train_sample_list, valid_sample_list,

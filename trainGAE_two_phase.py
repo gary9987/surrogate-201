@@ -11,11 +11,11 @@ from models.TransformerAE import TransformerAutoencoderNVP
 import tensorflow as tf
 import os
 from datasets.nb201_dataset import NasBench201Dataset, OP_PRIMITIVES_NB201
-from datasets.nb101_dataset import NasBench101Dataset, OP_PRIMITIVES_NB101, mask_for_model
+from datasets.nb101_dataset import NasBench101Dataset, OP_PRIMITIVES_NB101, mask_for_model, mask_padding_vertex_for_spec
 from datasets.utils import train_valid_test_split_dataset, mask_graph_dataset, arch_list_to_set, graph_to_str, \
     repeat_graph_dataset_element
 from spektral.data import PackedBatchLoader
-from evalGAE import eval_query_best, query_tabular
+from evalGAE import eval_query_best, query_tabular, nb101_dataset
 from utils.py_utils import get_logdir_and_logger
 from spektral.data import Graph
 from utils.tf_utils import to_undiredted_adj, set_global_determinism
@@ -339,6 +339,7 @@ def to_loader(datasets, batch_size: int, epochs: int):
 
 class RandomArchGenerator:
     def __init__(self, dataset_name, is_only_validation_data):
+        self.dataset_name = dataset_name
         if dataset_name == 'nb101':
             if os.path.exists('datasets/NasBench101Dataset.cache'):
                 self.datasets = pickle.load(open('datasets/NasBench101Dataset.cache', 'rb'))
@@ -363,11 +364,23 @@ class RandomArchGenerator:
         else:
             self.datasets.apply(ReshapeYTransform())
 
+    def pad_for_nb101(self, graph):
+        new_x = np.zeros((7, 5))
+        new_a = np.zeros((7, 7))
+        new_x[:graph.x.shape[0], :graph.x.shape[1]] = graph.x
+        new_a[:graph.a.shape[0], :graph.a.shape[1]] = graph.a
+        graph.x = new_x
+        graph.a = new_a
+        return graph
+
     def random_sample(self, visited, sample_amount):
         cand = []
         visited_arch = []
         while len(cand) < sample_amount:
             graphs = np.random.choice(self.datasets, sample_amount - len(cand), replace=False)
+            if self.dataset_name == 'nb101':
+                graphs = list(map(self.pad_for_nb101, graphs))
+
             found_arch_list = [{'x': g.x.astype(np.float32), 'a': g.a.astype(np.float32), 'y': g.y.reshape([1]).astype(np.float32)} for g in graphs]
             found_arch_list = list(
                 filter(lambda arch: graph_to_str(arch) not in visited_arch and graph_to_str(arch) not in visited,
@@ -397,16 +410,23 @@ def sample_arch_candidates(model, dataset_name, x_dim, z_dim, visited, sample_am
             if dataset_name == 'nb101':
                 found_arch_list = list(map(mask_for_model, found_arch_list))
                 found_arch_list = list(filter(lambda arch: arch is not None and arch['x'] is not None, found_arch_list))
-
-            found_in_this_round = list(filter(lambda arch: graph_to_str(arch) not in visited_arch and graph_to_str(arch) not in visited, found_arch_list))
-            found_in_this_round = arch_list_to_set(found_in_this_round)
+                found_in_this_round = []
+                for arch in found_arch_list:
+                    a, x = mask_padding_vertex_for_spec(arch['a'], arch['x'])
+                    spec_hash = nb101_dataset.get_spec_hash(a, np.argmax(x, axis=-1))
+                    if spec_hash not in visited_arch and spec_hash not in visited:
+                        found_in_this_round.append(arch)
+                        visited_arch.append(spec_hash)
+            else:
+                found_in_this_round = list(filter(lambda arch: graph_to_str(arch) not in visited_arch and graph_to_str(arch) not in visited, found_arch_list))
+                found_in_this_round = arch_list_to_set(found_in_this_round)
+                visited_arch.extend(list(map(graph_to_str, found_in_this_round)))
 
             if len(found_in_this_round) + len(found_arch_list_set) > sample_amount:
                 random.shuffle(found_in_this_round)
                 found_in_this_round = found_in_this_round[: sample_amount - len(found_arch_list_set)]
 
             found_arch_list_set.extend(found_in_this_round)
-            visited_arch.extend(list(map(graph_to_str, found_in_this_round)))
             retry += 1
 
         logger.info(f'std scale {noise_std_list[std_idx]}, num sample {len(found_arch_list_set)}')
@@ -435,9 +455,20 @@ def predict_arch_acc(found_arch_list_set, model):
             found_arch_list_set[i]['y'] = reg[i][-1].numpy()
 
 
+def graph_to_spec_graph(graph):
+    graph = copy.deepcopy(graph)
+    graph.a, graph.x = mask_padding_vertex_for_spec(graph.a, graph.x)
+    return graph
+
+
 def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, logger, repeat, top_k=5, random_sample=False):
     # Generate total 200 architectures
-    visited = {graph_to_str(i): i.y.tolist() for i in datasets['train'].graphs if not np.isnan(i.y).any()}
+    if dataset_name == 'nb101':
+        visited = {nb101_dataset.get_spec_hash(i.a, np.argmax(i.x, axis=-1)): i.y.tolist()
+                   for i in list(map(graph_to_spec_graph, datasets['train'].graphs)) if not np.isnan(i.y).any()}
+    else:
+        visited = {graph_to_str(i): i.y.tolist() for i in datasets['train'].graphs if not np.isnan(i.y).any()}
+
     if random_sample:
         found_arch_list_set = random_arch_generator.random_sample(visited, sample_amount=100)
     else:
@@ -467,9 +498,18 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, l
         logger.info('Top acc list is [] in this run')
 
     # Add top found architecture to training dataset
-    valid_visited = {graph_to_str(i): i.y.tolist() for i in datasets['valid'].graphs if not np.isnan(i.y).any()}
+    if dataset_name == 'nb101':
+        valid_visited = {nb101_dataset.get_spec_hash(i.a, np.argmax(i.x, axis=-1)): i.y.tolist() for i in datasets['valid'].graphs if not np.isnan(i.y).any()}
+    else:
+        valid_visited = {graph_to_str(i): i.y.tolist() for i in datasets['valid'].graphs if not np.isnan(i.y).any()}
+
     for i in found_arch_list_set:
-        graph_str = graph_to_str(i)
+        if dataset_name == 'nb101':
+            a, x = mask_padding_vertex_for_spec(i['a'], i['x'])
+            graph_str = nb101_dataset.get_spec_hash(a, np.argmax(x, axis=-1))
+        else:
+            graph_str = graph_to_str(i)
+
         if graph_str not in visited:
             if graph_str not in valid_visited:
                 logger.info(f'Data not in train and not in top_list {i["y"].tolist()}')

@@ -114,11 +114,17 @@ class GraphAutoencoder(tf.keras.Model):
         eps = tf.random.normal(shape=tf.shape(mean))
         return mean + tf.exp(log_var * 0.5) * eps * eps_scale
 
-    def call(self, inputs):
+    def call(self, inputs, kl_reduction='mean'):
         latent_mean, latent_var = self.encoder(inputs)  # (batch_size, context_len, d_model)
         c = self.sample(latent_mean, latent_var, self.eps_scale)
-        kl_loss = tf.reduce_mean(
-            -0.5 * tf.reduce_sum(1 + latent_var - tf.square(latent_mean) - tf.exp(latent_var), axis=-1))
+        kl_loss = -0.5 * tf.reduce_sum(1 + latent_var - tf.square(latent_mean) - tf.exp(latent_var), axis=-1)
+
+        if kl_reduction == 'mean':
+            # (1)
+            kl_loss = tf.reduce_mean(kl_loss)
+        elif kl_reduction == 'none':
+            # (batch_size)
+            kl_loss = tf.reduce_mean(kl_loss, axis=-1)
 
         ops_cls, adj_cls = self.decoder(c)  # (batch_size, target_len, d_model)
 
@@ -156,8 +162,8 @@ class GraphAutoencoderNVP(GraphAutoencoder):
         self.pad_dim = nvp_config['inp_dim'] - latent_dim * num_nodes
         self.nvp = NVP(**nvp_config)
 
-    def call(self, inputs):
-        ops_cls, adj_cls, kl_loss, latent_mean = super().call(inputs)
+    def call(self, inputs, kl_reduction='mean'):
+        ops_cls, adj_cls, kl_loss, latent_mean = super().call(inputs, kl_reduction)
         latent_mean = tf.reshape(latent_mean, (tf.shape(latent_mean)[0], -1))
         latent_mean = tf.concat([latent_mean, tf.zeros((tf.shape(latent_mean)[0], self.pad_dim))], axis=-1)
         reg = self.nvp(latent_mean)

@@ -184,18 +184,21 @@ class NasBench101Dataset(Dataset):
 
         return output
 
+    def get_spec_hash(self, matrix, ops):
+        if isinstance(ops[0], int) or isinstance(ops, np.ndarray):
+            ops = list(ops)
+            ops = [OPS_by_IDX_NB101[i] for i in ops]
+        matrix = np.array(matrix).astype(np.int8)
+        spec_hash = ModelSpec(matrix=matrix, ops=ops).hash_spec(NB101_CANONICAL_OPS)
+        return spec_hash
+
     def get_metrics(self, matrix, ops):
         """
         :param matrix: adj matrix for ModelSpec format
         :param ops: ops for ModelSpec format
         :return: dict: The metrics for the architecture corresponding to the given matrix and ops
         """
-        if isinstance(ops[0], int) or isinstance(ops, np.ndarray):
-            ops = list(ops)
-            ops = [OPS_by_IDX_NB101[i] for i in ops]
-        matrix = np.array(matrix).astype(np.int8)
-        spec_hash = ModelSpec(matrix=matrix, ops=ops).hash_spec(NB101_CANONICAL_OPS)
-        return self.hash_to_metrics[spec_hash]
+        return self.hash_to_metrics[self.get_spec_hash(matrix, ops)]
 
 
 if __name__ == '__main__':
