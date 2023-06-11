@@ -210,7 +210,7 @@ class Trainer2(tf.keras.Model):
             # The operations that the layer applies
             # to its inputs are going to be recorded
             # on the GradientTape.
-            ops_cls, adj_cls, kl_loss, y_out, x_encoding = self.model(undirected_x_batch_train, training=True)
+            ops_cls, adj_cls, kl_loss, y_out, x_encoding = self.model(undirected_x_batch_train, kl_reduction='none', training=True)
 
             # To avoid nan loss when batch size is small
             reg_loss, latent_loss = tf.cond(tf.reduce_any(nan_mask),
@@ -221,6 +221,10 @@ class Trainer2(tf.keras.Model):
             rec_loss = 0.
             if self.finetune:
                 ops_loss, adj_loss = cal_ops_adj_loss_for_graph(x_batch_train, ops_cls, adj_cls, self.reduction, rank_weight)
+                if rank_weight is not None:
+                    kl_loss = tf.reduce_sum(tf.multiply(kl_loss, rank_weight))
+                else:
+                    kl_loss = tf.reduce_mean(kl_loss)
                 rec_loss = self.ops_weight * ops_loss + self.adj_weight * adj_loss + self.kl_weight * kl_loss
                 forward_loss += rec_loss
 
@@ -264,7 +268,7 @@ class Trainer2(tf.keras.Model):
         nan_mask = tf.where(~tf.math.is_nan(tf.reduce_sum(y, axis=-1)), x=True, y=False)
         rank_weight = get_rank_weight(tf.boolean_mask(y, nan_mask)) if self.is_rank_weight else None
 
-        ops_cls, adj_cls, kl_loss, y_out, x_encoding = self.model(undirected_x_batch_train, training=False)
+        ops_cls, adj_cls, kl_loss, y_out, x_encoding = self.model(undirected_x_batch_train, kl_reduction='none', training=False)
         reg_loss, latent_loss = tf.cond(tf.reduce_any(nan_mask),
                                         lambda: self.cal_reg_and_latent_loss(y, z, y_out, nan_mask, rank_weight),
                                         lambda: (0., 0.))
@@ -275,6 +279,11 @@ class Trainer2(tf.keras.Model):
         backward_loss = self.w3 * rev_loss
         if self.finetune:
             ops_loss, adj_loss = cal_ops_adj_loss_for_graph(x_batch_train, ops_cls, adj_cls, self.reduction, rank_weight)
+            if rank_weight is not None:
+                kl_loss = tf.reduce_sum(tf.multiply(kl_loss, rank_weight))
+            else:
+                kl_loss = tf.reduce_mean(kl_loss)
+
             rec_loss = self.ops_weight * ops_loss + self.adj_weight * adj_loss + self.kl_weight * kl_loss
             forward_loss += rec_loss
 
@@ -462,7 +471,7 @@ def graph_to_spec_graph(graph):
 
 
 def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, logger, repeat, top_k=5, random_sample=False):
-    # Generate total 200 architectures
+    # Generate total 100 architectures
     if dataset_name == 'nb101':
         visited = {nb101_dataset.get_spec_hash(i.a, np.argmax(i.x, axis=-1)): i.y.tolist()
                    for i in list(map(graph_to_spec_graph, datasets['train'].graphs)) if not np.isnan(i.y).any()}
