@@ -209,8 +209,8 @@ class GraphAutoencoderEnsembleNVP(GraphAutoencoder):
         self.pad_dim = nvp_config['inp_dim'] - latent_dim * num_nodes
         self.nvp_list = [NVP(**nvp_config) for _ in range(num_nvp)]
 
-    def call(self, inputs):
-        ops_cls, adj_cls, kl_loss, latent_mean = super().call(inputs)
+    def call(self, inputs, kl_reduction='mean'):
+        ops_cls, adj_cls, kl_loss, latent_mean = super().call(inputs, kl_reduction)
         latent_mean = tf.reshape(latent_mean, (tf.shape(latent_mean)[0], -1))
         latent_mean = tf.concat([latent_mean, tf.zeros((tf.shape(latent_mean)[0], self.pad_dim))], axis=-1)
         reg = tf.transpose(tf.stack([nvp(latent_mean) for nvp in self.nvp_list]), (1, 0, 2))

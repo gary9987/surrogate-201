@@ -576,11 +576,6 @@ def prepare_model(nvp_config, latent_dim, num_layers, d_model, num_heads, dff, n
 
 
 def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_budget, top_k, finetune, retrain_finetune, is_rank_weight, random_sample):
-    #top_k = 5
-    #finetune = True
-    #retrain_finetune = True
-    #is_rank_weight = True
-
     logdir, logger = get_logdir_and_logger(
         os.path.join(f'{train_sample_amount}_{valid_sample_amount}_{query_budget}_finetune{finetune}_rfinetune{retrain_finetune}_rank{is_rank_weight}',
                      dataset_name), f'trainGAE_two_phase_{seed}.log')

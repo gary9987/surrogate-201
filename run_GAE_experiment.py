@@ -8,15 +8,21 @@ import pickle
 
 
 if __name__ == '__main__':
-    train_sample_list = [50]
-    valid_sample_list = [10]
-    budget_list = [192]
-    dataset_name = 'nb101'
+    top_k = 5
+    finetune = False
+    retrain_finetune = False
+    is_rank_weight = False
+    random_sample = False
+
+    train_sample_list = [50] * 3
+    valid_sample_list = [10] * 3
+    budget_list = [400] * 3
+    dataset_names = ['cifar10-valid', 'cifar100', 'ImageNet16-120']  # 'cifar10-valid', 'cifar100', 'ImageNet16-120'
     now_time = datetime.now().strftime("%Y%m%d-%H%M%S")
-    logdir = now_time + dataset_name +'_experiments'
+    logdir = now_time + f'top{top_k}_finetune{finetune}_rfinetune{retrain_finetune}_rank{is_rank_weight}_randomS{random_sample}_ensemble'
     os.makedirs(logdir, exist_ok=True)
 
-    for train_sample, valid_sample, budget in zip(train_sample_list, valid_sample_list, budget_list):
+    for dataset_name, train_sample, valid_sample, budget in zip(dataset_names, train_sample_list, valid_sample_list, budget_list):
         best_acc_list = []
         best_test_acc_list = []
         record_list = []
@@ -24,7 +30,9 @@ if __name__ == '__main__':
             best_acc, best_test_acc, record = main(seed=i, dataset_name=dataset_name,
                                                     train_sample_amount=train_sample,
                                                     valid_sample_amount=valid_sample,
-                                                    query_budget=budget)
+                                                    query_budget=budget, top_k=top_k, finetune=finetune,
+                                                   retrain_finetune=retrain_finetune, is_rank_weight=is_rank_weight,
+                                                   random_sample=random_sample)
             best_acc_list.append(best_acc)
             best_test_acc_list.append(best_test_acc)
             record_list.append(record)
