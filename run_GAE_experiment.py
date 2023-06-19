@@ -14,12 +14,17 @@ if __name__ == '__main__':
     is_rank_weight = False
     random_sample = False
 
+    num_couples = 2
+    n_couple_layer = 4
+    n_hid_layer = 4
+    n_hid_dim = 128
+
     train_sample_list = [50] * 3
     valid_sample_list = [10] * 3
     budget_list = [400] * 3
     dataset_names = ['cifar10-valid', 'cifar100', 'ImageNet16-120']  # 'cifar10-valid', 'cifar100', 'ImageNet16-120'
     now_time = datetime.now().strftime("%Y%m%d-%H%M%S")
-    logdir = now_time + f'top{top_k}_finetune{finetune}_rfinetune{retrain_finetune}_rank{is_rank_weight}_randomS{random_sample}_ensemble'
+    logdir = now_time + f'top{top_k}_finetune{finetune}_rfinetune{retrain_finetune}_rank{is_rank_weight}_randomS{random_sample}_ensemble_{num_couples}NN_{n_couple_layer}*{n_hid_layer}*{n_hid_dim}'
     os.makedirs(logdir, exist_ok=True)
 
     for dataset_name, train_sample, valid_sample, budget in zip(dataset_names, train_sample_list, valid_sample_list, budget_list):
@@ -32,7 +37,9 @@ if __name__ == '__main__':
                                                     valid_sample_amount=valid_sample,
                                                     query_budget=budget, top_k=top_k, finetune=finetune,
                                                    retrain_finetune=retrain_finetune, is_rank_weight=is_rank_weight,
-                                                   random_sample=random_sample)
+                                                   random_sample=random_sample, num_couples=num_couples,
+                                                   n_couple_layer=n_couple_layer, n_hid_layer=n_hid_layer,
+                                                   n_hid_dim=n_hid_dim)
             best_acc_list.append(best_acc)
             best_test_acc_list.append(best_test_acc)
             record_list.append(record)

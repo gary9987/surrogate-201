@@ -617,8 +617,9 @@ def prepare_model(num_nvp, nvp_config, latent_dim, num_layers, d_model, num_head
     return pretrained_model, model  #, retrain_model
 
 
-def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_budget, top_k, finetune, retrain_finetune, is_rank_weight, random_sample):
-    logdir, logger = get_logdir_and_logger(os.path.join(f'{train_sample_amount}_{valid_sample_amount}_{query_budget}_top{top_k}_finetune{finetune}_rfinetune{retrain_finetune}_rank{is_rank_weight}_ensemble',
+def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_budget,
+         top_k, finetune, retrain_finetune, is_rank_weight, random_sample, num_couples, n_couple_layer, n_hid_layer, n_hid_dim):
+    logdir, logger = get_logdir_and_logger(os.path.join(f'{train_sample_amount}_{valid_sample_amount}_{query_budget}_top{top_k}_finetune{finetune}_rfinetune{retrain_finetune}_rank{is_rank_weight}_ensemble_{num_couples}NN_{n_couple_layer}*{n_hid_layer}*{n_hid_dim}',
                                                         dataset_name), f'trainGAE_ensemble_{seed}.log')
     random_seed = seed
     set_global_determinism(random_seed)
@@ -688,11 +689,11 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
 
     num_nvp = 10
     nvp_config = {
-        'n_couple_layer': 4,
-        'n_hid_layer': 4,
-        'n_hid_dim': 128,
+        'n_couple_layer': n_couple_layer,
+        'n_hid_layer': n_hid_layer,
+        'n_hid_dim': n_hid_dim,
         'name': 'NVP',
-        'num_couples': 2,
+        'num_couples': num_couples,
         'inp_dim': tot_dim
     }
 
@@ -833,5 +834,6 @@ if __name__ == '__main__':
     args = parse_args()
     os.environ['CUDA_VISIBLE_DEVICES'] = ''
     main(args.seed, args.dataset, args.train_sample_amount, args.valid_sample_amount, args.query_budget,
-         top_k=5, finetune=False, retrain_finetune=False, is_rank_weight=True, random_sample=False)
+         top_k=5, finetune=False, retrain_finetune=False, is_rank_weight=True, random_sample=False, num_couples=2,
+         n_couple_layer=4, n_hid_layer=4, n_hid_dim=128)
 
