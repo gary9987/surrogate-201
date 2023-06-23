@@ -220,11 +220,13 @@ class Trainer2(tf.keras.Model):
             forward_loss = self.w1 * reg_loss + self.w2 * latent_loss
             rec_loss = 0.
             if self.finetune:
-                ops_loss, adj_loss = cal_ops_adj_loss_for_graph(x_batch_train, ops_cls, adj_cls, self.reduction, rank_weight)
+                ops_loss, adj_loss = cal_ops_adj_loss_for_graph(x_batch_train, ops_cls, adj_cls, 'auto', None)
+                '''
                 if rank_weight is not None:
                     kl_loss = tf.reduce_sum(tf.multiply(kl_loss, rank_weight))
                 else:
-                    kl_loss = tf.reduce_mean(kl_loss)
+                '''
+                kl_loss = tf.reduce_mean(kl_loss)
                 rec_loss = self.ops_weight * ops_loss + self.adj_weight * adj_loss + self.kl_weight * kl_loss
                 forward_loss += rec_loss
 
@@ -278,11 +280,13 @@ class Trainer2(tf.keras.Model):
                            lambda: 0.)
         backward_loss = self.w3 * rev_loss
         if self.finetune:
-            ops_loss, adj_loss = cal_ops_adj_loss_for_graph(x_batch_train, ops_cls, adj_cls, self.reduction, rank_weight)
+            ops_loss, adj_loss = cal_ops_adj_loss_for_graph(x_batch_train, ops_cls, adj_cls, 'auto', None)
+            '''
             if rank_weight is not None:
                 kl_loss = tf.reduce_sum(tf.multiply(kl_loss, rank_weight))
             else:
-                kl_loss = tf.reduce_mean(kl_loss)
+            '''
+            kl_loss = tf.reduce_mean(kl_loss)
 
             rec_loss = self.ops_weight * ops_loss + self.adj_weight * adj_loss + self.kl_weight * kl_loss
             forward_loss += rec_loss
