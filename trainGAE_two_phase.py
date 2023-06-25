@@ -394,18 +394,25 @@ class RandomArchGenerator:
             graphs = np.random.choice(self.datasets, sample_amount - len(cand), replace=False)
             if self.dataset_name == 'nb101':
                 graphs = list(map(self.pad_for_nb101, graphs))
+                for g in graphs:
+                    a, x = mask_padding_vertex_for_spec(g.a, g.x)
+                    spec_hash = nb101_dataset.get_spec_hash(a, np.argmax(x, axis=-1))
+                    if spec_hash not in visited_arch and spec_hash not in visited:
+                        cand.append({'x': g.x.astype(np.float32), 'a': g.a.astype(np.float32), 'y': g.y.reshape([1]).astype(np.float32)})
+                        visited_arch.append(spec_hash)
+            else:
+                found_arch_list = [{'x': g.x.astype(np.float32), 'a': g.a.astype(np.float32), 'y': g.y.reshape([1]).astype(np.float32)} for g in graphs]
+                found_arch_list = list(
+                    filter(lambda arch: graph_to_str(arch) not in visited_arch and graph_to_str(arch) not in visited,
+                           found_arch_list))
+                cand.extend(found_arch_list)
+                visited_arch.extend(list(map(graph_to_str, found_arch_list)))
 
-            found_arch_list = [{'x': g.x.astype(np.float32), 'a': g.a.astype(np.float32), 'y': g.y.reshape([1]).astype(np.float32)} for g in graphs]
-            found_arch_list = list(
-                filter(lambda arch: graph_to_str(arch) not in visited_arch and graph_to_str(arch) not in visited,
-                       found_arch_list))
-            cand.extend(found_arch_list)
-            visited_arch.extend(list(map(graph_to_str, found_arch_list)))
-
-        return cand
+        return cand[: sample_amount]
 
 
 random_arch_generator: RandomArchGenerator = None
+
 
 def sample_arch_candidates(model, dataset_name, x_dim, z_dim, visited, sample_amount=200):
     logger = logging.getLogger(__name__)

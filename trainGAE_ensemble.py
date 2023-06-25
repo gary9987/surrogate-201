@@ -14,7 +14,7 @@ from datasets.nb201_dataset import NasBench201Dataset, OP_PRIMITIVES_NB201
 from datasets.utils import train_valid_test_split_dataset, mask_graph_dataset, arch_list_to_set, graph_to_str, \
     repeat_graph_dataset_element
 from evalGAE import eval_query_best, nb101_dataset, query_tabular
-from trainGAE_two_phase import to_loader, mask_for_model, graph_to_spec_graph
+from trainGAE_two_phase import to_loader, mask_for_model, graph_to_spec_graph, RandomArchGenerator
 from utils.py_utils import get_logdir_and_logger
 from spektral.data import Graph, PackedBatchLoader
 from utils.tf_utils import to_undiredted_adj, set_global_determinism
@@ -406,6 +406,9 @@ def get_new_archs_and_add_to_dataset(dataset_name, datasets, top_k, repeat,
     return num_new_found, found_arch_list_set
 
 
+random_arch_generator: RandomArchGenerator = None
+
+
 def sample_arch_candidates(model, dataset_name, x_dim, z_dim, visited, sample_amount=200):
     logger = logging.getLogger(__name__)
     found_arch_list_set = []
@@ -639,6 +642,9 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     num_heads = 3
 
     latent_dim = 16
+
+    global random_arch_generator
+    random_arch_generator = RandomArchGenerator(dataset_name, is_only_validation_data)
 
     if dataset_name == 'nb101':
         num_ops = len(OP_PRIMITIVES_NB101)  # 5
