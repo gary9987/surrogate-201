@@ -79,16 +79,20 @@ def plot_search_curve(filename, start=105, end=405, opt=0.91606):
     y_test = []
     std_test = []
 
+    opt_key = 0
     for key, value in q_to_v_valid.items():
         if key % 50 == 0 or key % 190 == 0:
             print(key, np.mean(value), np.std(value))
+        if np.mean(value) >= opt and opt_key == 0:
+            opt_key = key
+            print(key, np.mean(value) * 100, np.std(value) * 100)
         x_valid.append(key)
         y_valid.append(np.mean(value))
         std_valid.append(np.std(value))
 
     for key, value in q_to_v_test.items():
         #print(key, np.mean(value), np.std(value))
-        if key % 50 == 0 or key % 190 == 0:
+        if key % 50 == 0 or key % 190 == 0 or key == opt_key:
             print(key, np.mean(value), np.std(value))
         x_test.append(key)
         y_test.append(np.mean(value))

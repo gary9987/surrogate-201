@@ -475,7 +475,7 @@ def predict_arch_acc(found_arch_list_set, model, theta):
 
 
 # TODO: random sample
-def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, repeat, top_k=5):
+def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, repeat, top_k=5, random_sample=False):
     logger = logging.getLogger(__name__)
     # Generate total 100 architectures
     if dataset_name == 'nb101':
@@ -485,8 +485,11 @@ def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, r
         visited = {graph_to_str(i): i.y.tolist() for i in datasets['train'].graphs if not np.isnan(i.y).any()}
 
     # Generate total at least sample amount architectures
-    found_arch_list_set = sample_arch_candidates(trainer.model, dataset_name, trainer.x_dim, trainer.z_dim, visited,
-                                                 sample_amount=100)
+    if random_sample:
+        found_arch_list_set = random_arch_generator.random_sample(visited, sample_amount=100)
+    else:
+        found_arch_list_set = sample_arch_candidates(trainer.model, dataset_name, trainer.x_dim, trainer.z_dim, visited,
+                                                     sample_amount=100)
     '''
     if found_arch_list_set is None:
         loader = to_loader(datasets, batch_size, epochs=500)
@@ -785,7 +788,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
             top_acc_list, top_test_acc_list, top_arch_list, num_new_found = retrain(trainer, datasets, dataset_name,
                                                                                     batch_size,
                                                                                     retrain_epochs, logdir,
-                                                                                    repeat_label, top_k)
+                                                                                    repeat_label, top_k, random_sample)
 
             global_top_acc_list += top_acc_list
             global_top_test_acc_list += top_test_acc_list
@@ -838,7 +841,6 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
 
 if __name__ == '__main__':
     args = parse_args()
-    os.environ['CUDA_VISIBLE_DEVICES'] = ''
     main(args.seed, args.dataset, args.train_sample_amount, args.valid_sample_amount, args.query_budget,
          top_k=5, finetune=False, retrain_finetune=False, is_rank_weight=True, random_sample=False, num_couples=2,
          n_couple_layer=4, n_hid_layer=4, n_hid_dim=128)
