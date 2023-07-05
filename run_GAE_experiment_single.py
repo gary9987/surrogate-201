@@ -12,10 +12,10 @@ if __name__ == '__main__':
     retrain_finetune = True
     is_rank_weight = True
     random_sample = False
-    train_sample_list = [50, 50, 50]
-    valid_sample_list = [50, 50, 50]
-    budget_list = [400, 400, 400]
-    dataset_names = ['cifar10-valid', 'cifar100', 'ImageNet16-120']  # 'cifar10-valid', 'cifar100', 'ImageNet16-120'
+    train_sample_list = [50] * 4
+    valid_sample_list = [10] * 4
+    budget_list = [400, 400, 400, 500]
+    dataset_names = ['cifar10-valid', 'cifar100', 'ImageNet16-120', 'nb101']  # 'cifar10-valid', 'cifar100', 'ImageNet16-120'
     now_time = datetime.now().strftime("%Y%m%d-%H%M%S")
     logdir = now_time + f'_finetune{finetune}_rfinetune{retrain_finetune}_rank{is_rank_weight}_randomS{random_sample}_1NVP'
     os.makedirs(logdir, exist_ok=True)
