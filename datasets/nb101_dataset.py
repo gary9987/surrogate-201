@@ -209,7 +209,7 @@ if __name__ == '__main__':
         records = pickle.load(f)
 
     print(len(records))  # 423624
-    #transform_nb101_data_list_to_graph(records)
+    transform_nb101_data_list_to_graph(records)
     datasets = NasBench101Dataset(end=1000, root='../')
     matrix = np.array([[0, 1, 0, 0, 0, 0, 0],
                        [0, 0, 1, 0, 0, 0, 0],
