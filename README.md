@@ -1,7 +1,12 @@
 # surrogate-201
 - For my master thesis, Efficient Neural Architecture Generation with an Invertible Neural Network for Neural Architecture Search, is using single nvp.
+## Requirement Package
+- tensorflow==2.10.0
+- spektral==1.2.0
+- wget
 ## Data preprocessing
 - The training script will download the preprocessed data automatically. This step can be skipped.
+- The preprocessed data have a copy in CML server `/project/n/gychen/`
 ### NAS-Bench-101
 - Install NAS-Bench-101 https://github.com/google-research/nasbench
 - Query the nb101 data (This step should run on tf1.x environment)
