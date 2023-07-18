@@ -780,7 +780,7 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         trainer.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3), run_eagerly=False)
 
         run = 0
-        while now_queried < query_budget and run <= 450:
+        while now_queried < query_budget and run <= 100:
             logger.info('')
             logger.info(f'Retrain run {run}')
             top_acc_list, top_test_acc_list, top_arch_list, num_new_found = retrain(trainer, datasets, dataset_name,
