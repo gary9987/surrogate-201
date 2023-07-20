@@ -24,7 +24,7 @@ import logging
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--train_sample_amount', type=int, default=50, help='Number of samples to train (default: 50)')
-    parser.add_argument('--valid_sample_amount', type=int, default=50, help='Number of samples to train (default: 50)')
+    parser.add_argument('--valid_sample_amount', type=int, default=10, help='Number of samples to train (default: 10)')
     parser.add_argument('--query_budget', type=int, default=192)
     parser.add_argument('--dataset', type=str, default='cifar10-valid', help='Could be nb101, cifar10-valid, cifar100, ImageNet16-120')
     parser.add_argument('--top_k', type=int, default=5)
@@ -456,6 +456,8 @@ def sample_arch_candidates(model, dataset_name, x_dim, z_dim, visited, sample_am
     return found_arch_list_set
 
 
+latent_in_each_round = []
+
 def predict_arch_acc(found_arch_list_set, model, theta):
     """
     Predict accuracy by INN (performance predictor) with theta weight and assign
@@ -464,7 +466,8 @@ def predict_arch_acc(found_arch_list_set, model, theta):
     x = tf.stack([tf.constant(i['x']) for i in found_arch_list_set])
     a = tf.stack([tf.constant(i['a']) for i in found_arch_list_set])
     if tf.shape(x)[0] != 0:
-        _, _, _, reg, _ = model((x, to_undiredted_adj(a)), training=False)  # (batch, num_nvp, z_dim+y_dim)
+        _, _, _, reg, latent_mean = model((x, to_undiredted_adj(a)), training=False)  # (batch, num_nvp, z_dim+y_dim)
+        latent_in_each_round.append(latent_mean)
         reg = reg[:, :, -1]  # (batch, num_nvp)
         theta_expanded = tf.expand_dims(theta, axis=0)  # (1, num_nvp)
         reg = reg * tf.tile(theta_expanded, (tf.shape(reg)[0], 1))
@@ -833,6 +836,9 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     else:
         model.load_weights(pretrained_weight)
 
+    with open(os.path.join(logdir, 'latent_in_each_round.pkl'), 'wb') as f:
+        pickle.dump(latent_in_each_round, f)
+
     logger.info('Final result')
     logger.info(f'Best found acc {max(global_top_acc_list)}')
     logger.info(f'Best test acc {max(global_top_test_acc_list)}')
@@ -841,7 +847,8 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
 
 if __name__ == '__main__':
     args = parse_args()
+    os.environ['CUDA_VISIBLE_DEVICES'] = ''
     main(args.seed, args.dataset, args.train_sample_amount, args.valid_sample_amount, args.query_budget,
          top_k=5, finetune=False, retrain_finetune=False, is_rank_weight=True, random_sample=False, num_couples=2,
-         n_couple_layer=4, n_hid_layer=4, n_hid_dim=128)
+         n_couple_layer=4, n_hid_layer=5, n_hid_dim=256)
 
