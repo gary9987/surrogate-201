@@ -631,9 +631,9 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
     is_only_validation_data = True
     train_phase = [0, 1]  # 0 not train, 1 train
     if dataset_name == 'nb101':
-        pretrained_weight = 'logs/phase1_nb101_CE_64/modelGAE_weights_phase1'
+        pretrained_weight = 'logs/50_50_192_top5_finetuneFalse_rfinetuneFalse_rankTrue_ensemble_2NN_4*4*128/nb101/20230723-231938/modelGAE_weights_phase1'
     else:
-        pretrained_weight = 'logs/50_50_192_top5_finetuneFalse_rfinetuneFalse_rankTrue_ensemble_2NN_4*4*128/cifar10-valid/20230716-214905/modelGAE_weights_phase1'
+        pretrained_weight = 'logs/50_50_192_top5_finetuneFalse_rfinetuneFalse_rankTrue_ensemble_2NN_4*4*128/cifar10-valid/20230720-232432/modelGAE_weights_phase1'
 
     eps_scale = 0.05  # 0.1
     d_model = 32

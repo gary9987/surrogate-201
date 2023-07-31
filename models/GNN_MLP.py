@@ -110,7 +110,7 @@ class GraphAutoencoder(tf.keras.Model):
         self.eps_scale = eps_scale
         self.encoder = GINEncoder(self.latent_dim, [128, 128, 128, 128], 'relu', dropout_rate)
 
-        self.decoder = MLPDecoder(num_layers, d_model, num_ops, num_nodes)
+        self.decoder = MLPDecoder(num_layers, dff, num_ops, num_nodes)
         '''
         self.decoder = TransformerDecoder(num_layers=num_layers, d_model=d_model, num_heads=num_heads,
                                           dff=dff, input_length=num_nodes, num_ops=num_ops, num_nodes=num_nodes,

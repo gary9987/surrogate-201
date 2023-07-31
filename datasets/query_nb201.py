@@ -61,6 +61,7 @@ if __name__ == '__main__':
             print('start model NO. {}'.format(idx))
             record = {metric: [] for metric in metrics}
 
+            #info = api.get_more_info(idx, on_dataset, hp='200', is_random=False)
             arch_meta_info = api.query_meta_info_by_index(idx, hp=hp)
             total_train_epo = arch_meta_info.get_total_epoch(on_dataset)  # 12 for cifar10 training
 

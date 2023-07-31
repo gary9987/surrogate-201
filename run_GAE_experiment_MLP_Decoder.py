@@ -21,8 +21,8 @@ if __name__ == '__main__':
 
     train_sample_list = [50] * 4
     valid_sample_list = [10] * 4
-    budget_list = [190] * 4
-    dataset_names = ['cifar10-valid', 'cifar100', 'ImageNet16-120']  # 'cifar10-valid', 'cifar100', 'ImageNet16-120'
+    budget_list = [500] * 4
+    dataset_names = ['cifar10-valid', 'cifar100', 'ImageNet16-120', 'nb101']  # 'cifar10-valid', 'cifar100', 'ImageNet16-120'
     now_time = datetime.now().strftime("%Y%m%d-%H%M%S")
     logdir = now_time + f'top{top_k}_finetune{finetune}_rfinetune{retrain_finetune}_rank{is_rank_weight}_randomS{random_sample}_ensemble_{num_couples}NN_{n_couple_layer}*{n_hid_layer}*{n_hid_dim}'
     os.makedirs(logdir, exist_ok=True)
