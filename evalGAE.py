@@ -186,7 +186,7 @@ def eval_query_best(model: tf.keras.Model, dataset_name, x_dim: int, z_dim: int,
     return invalid, sum(y) / len(y), max(y), found_arch_list
 
 
-def query_tabular(dataset_name: str, archs: Union[List, spektral.data.Dataset]):
+def query_tabular(dataset_name: str, archs: Union[List, spektral.data.Dataset], x_list=[]):
     if isinstance(archs, spektral.data.Dataset):
         archs = [{'a': graph.a, 'x': graph.x} for graph in archs]
 
@@ -195,6 +195,7 @@ def query_tabular(dataset_name: str, archs: Union[List, spektral.data.Dataset]):
         if dataset_name != 'nb101':
             acc = query_acc_by_ops(i['x'], dataset_name)
             test_acc = query_acc_by_ops(i['x'], dataset_name, on='test-accuracy')
+            x_list.append(i['x'])
         else:
             i = mask_for_spec(i)
             metrics = nb101_dataset.get_metrics(i['a'], np.argmax(i['x'], axis=-1))

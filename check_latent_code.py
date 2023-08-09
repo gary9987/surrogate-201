@@ -14,6 +14,10 @@ api = create(None, 'tss', fast_mode=True, verbose=False)
 os.environ['CUDA_VISIBLE_DEVICES'] = ''
 
 
+def l2_norm(x, y):
+    return np.sum(np.square(x - y))
+
+
 if __name__ == '__main__':
     '''
     filename = 'logs/50_10_500_top5_finetuneFalse_rfinetuneFalse_rankTrue_ensemble_2NN_4*5*256/ImageNet16-120/20230731-163747/latent_in_each_round.pkl'
@@ -173,12 +177,16 @@ if __name__ == '__main__':
             embedding_idx.append(index)
 
     print(len(embedding_idx))
+    with open('/home/gary/embedding_idx.pkl', 'wb') as f:
+        pickle.dump(embedding_idx, f)
 
     all_embedding = [embedding_list[i] for i in embedding_idx]
+
     max_dis = 0.
-    loss = tf.keras.metrics.RootMeanSquaredError()
+    loss = tf.keras.losses.mean_squared_error
     for i in all_embedding:
         for j in all_embedding:
-            max_dis = max(max_dis, loss(i, j))
+            x = l2_norm(np.array(i), np.array(j))
+            max_dis = max(max_dis, l2_norm(np.array(i), np.array(j)))
 
-    print(max_dis)
+    print(max_dis)  # 1.2167107946909481

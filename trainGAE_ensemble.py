@@ -758,13 +758,16 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
         datasets['train_1'].filter(lambda g: not np.isnan(g.y))
         datasets['valid_1'].filter(lambda g: not np.isnan(g.y))
 
+        x_list = []
         # Add initial data to records
-        acc_list = query_tabular(dataset_name, datasets['train_1'])
+        acc_list = query_tabular(dataset_name, datasets['train_1'], x_list)
         global_top_acc_list.extend([i['valid-accuracy'] for i in acc_list])
         global_top_test_acc_list.extend([i['test-accuracy'] for i in acc_list])
-        acc_list = query_tabular(dataset_name, datasets['valid_1'])
+        acc_list = query_tabular(dataset_name, datasets['valid_1'], x_list)
         global_top_acc_list.extend([i['valid-accuracy'] for i in acc_list])
         global_top_test_acc_list.extend([i['test-accuracy'] for i in acc_list])
+        print(x_list)
+        latent_in_each_round.append((0, x_list))
 
         datasets['train'] = repeat_graph_dataset_element(datasets['train_1'], repeat_label)
         datasets['valid'] = repeat_graph_dataset_element(datasets['valid_1'], repeat_label)
