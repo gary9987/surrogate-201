@@ -11,7 +11,8 @@
 - Install NAS-Bench-101 https://github.com/google-research/nasbench
 - Query the nb101 data (This step should run on tf1.x environment)
   ```python
-  python datasets/query_nb101.py
+  cd datasets
+  python query_nb101.py
   ```
 - Transform to spektral graph dataset
   ```python

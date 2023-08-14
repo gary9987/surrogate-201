@@ -202,7 +202,7 @@ class NasBench101Dataset(Dataset):
 
 
 if __name__ == '__main__':
-    output_dir = os.path.join('../nb101_query_data')
+    output_dir = os.path.join('nb101_query_data')
     filename = 'nb101_data_list.pkl'
 
     with open(os.path.join(output_dir, filename), 'rb') as f:
