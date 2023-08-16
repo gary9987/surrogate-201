@@ -1,6 +1,7 @@
 # surrogate-201
 - For my master thesis, Efficient Neural Architecture Generation with an Invertible Neural Network for Neural Architecture Search, is using single nvp.
 ## Requirement Package
+- python==3.8
 - tensorflow==2.10.0
 - spektral==1.2.0
 - wget
@@ -8,6 +9,13 @@
 - The training script will download the preprocessed data automatically. This step can be skipped.
 - The preprocessed data have a copy in CML server `/project/n/gychen/`
 ### NAS-Bench-101
+- Data preprocessing for NAS-Bench-101 is required tf1.x environment. We use conda for example.
+- Set up tf1.x env (conda env as an example)
+  ```
+  conda create -n tf1.15 python==3.7
+  conda activate tf1.15
+  pip install tensorflow==1.15
+  ```
 - Install NAS-Bench-101 https://github.com/google-research/nasbench
 - Query the nb101 data (This step should run on tf1.x environment)
   ```python
@@ -16,8 +24,8 @@
   ```
 - Transform to spektral graph dataset
   ```python
-  cd datasets
-  python nb101_dataset.py
+  export PYTHONPATH=$PWD
+  python datasets/nb101_dataset.py
   ```
 - The preprocessed data will be saved in `NasBench101Dataset`
 ### NAS-Bench-201
@@ -26,7 +34,7 @@
 - Query the nb201 data
   ```python
   cd datasets
-  python datasets/query_nb201.py
+  python query_nb201.py
   ```
 - Transform to spektral graph dataset
   ```python
@@ -47,7 +55,7 @@ else:
 ```
 ### Run experiment for multiple runs
 - We can adjust the parameters in `run_GAE_experiment_single.py`
-- `python run_GAE_experiment_single.py`
+- RUN `python run_GAE_experiment_single.py`
 
 ## Aggregate NVP
 ### Pre-train 
@@ -61,9 +69,17 @@ else:
       budget_list = [192]
       dataset_name = 'nb101' # can be nb101 cifar10-valid cifar100 ImageNet16-120
       ```
-- `python run_GAE_experiment.py`
+- RUN `python run_GAE_experiment.py`
 ## TSNE Visualization
 - Using `trainGAE_for_visualization.py` to record the arch in each iteration
 - Using `tsne.ipynb` to visualize the arch. Only need to change `model_dir = ` to the path of the output of `trainGAE_for_visualization`.
 ## Searching Curve
-- Using `search_curve_visualization.py` to plot the search curve
+- Using the function `plot_search_curve` in `search_curve_visualization.py` and pass the path of record to plot the searching curve and show the NAS results on each query budget
+## Acknowledgement
+Code base from
+- [NAS-Bench-101](https://github.com/google-research/nasbench)
+- [NAS-Bench-201](https://github.com/D-X-Y/NAS-Bench-201)
+- [NATS-Bench (NAS-Bench-201)](https://github.com/D-X-Y/NATS-Bench)
+- [Naszilla](https://github.com/naszilla/naszilla)
+- [NASLib](https://github.com/automl/NASLib)
+- [jaekookang/invertible_neural_networks](https://github.com/jaekookang/invertible_neural_networks)

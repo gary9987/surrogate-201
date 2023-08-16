@@ -41,7 +41,7 @@ def convert_matrix_ops_to_graph(matrix, ops):
 
 
 def transform_nb101_data_list_to_graph(records: dict):
-    file_path = f'../NasBench101Dataset'
+    file_path = f'NasBench101Dataset'
     Path(file_path).mkdir(exist_ok=True)
     epoch = 108
     map_hash_to_metrics = {}
@@ -202,7 +202,7 @@ class NasBench101Dataset(Dataset):
 
 
 if __name__ == '__main__':
-    output_dir = os.path.join('nb101_query_data')
+    output_dir = os.path.join('datasets/nb101_query_data')
     filename = 'nb101_data_list.pkl'
 
     with open(os.path.join(output_dir, filename), 'rb') as f:

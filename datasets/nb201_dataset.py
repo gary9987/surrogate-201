@@ -189,7 +189,7 @@ if __name__ == '__main__':
             seed_list = [False]
 
         for seed in seed_list:
-            output_dir = os.path.join('../nb201_query_data', dataset)
+            output_dir = os.path.join('nb201_query_data', dataset)
             filename = f'hp{hp}_seed{seed}.pkl'
             with open(os.path.join(output_dir, filename), 'rb') as f:
                 records = pickle.load(f)
