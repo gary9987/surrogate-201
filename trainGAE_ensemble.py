@@ -474,7 +474,6 @@ def predict_arch_acc(found_arch_list_set, model, theta):
             found_arch_list_set[i]['y'] = reg[i]
 
 
-# TODO: random sample
 def retrain(trainer, datasets, dataset_name, batch_size, train_epochs, logdir, repeat, top_k=5, random_sample=False):
     logger = logging.getLogger(__name__)
     # Generate total 100 architectures
@@ -819,8 +818,8 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
             #    break
 
             target_acc = {'cifar10-valid': 0.9160, 'cifar100': 0.7349, 'ImageNet16-120': [0.4673, 0.4731],
-                          'nb101': 0.9505}
-            if dataset_name == 'ImageNet16-120':
+                          'nb101': [0.9505, 0.94317]}
+            if dataset_name in ['ImageNet16-120', 'nb101']:
                 if max(global_top_acc_list) > target_acc.get(dataset_name, 1.0)[0] and max(global_top_test_acc_list) > \
                         target_acc.get(dataset_name, 1.0)[1]:
                     logger.info(f'Find optimal query amount {now_queried}')
@@ -841,7 +840,8 @@ def main(seed, dataset_name, train_sample_amount, valid_sample_amount, query_bud
 
 if __name__ == '__main__':
     args = parse_args()
+    #os.environ['CUDA_VISIBLE_DEVICES'] = ''
     main(args.seed, args.dataset, args.train_sample_amount, args.valid_sample_amount, args.query_budget,
          top_k=5, finetune=False, retrain_finetune=False, is_rank_weight=True, random_sample=False, num_couples=2,
-         n_couple_layer=4, n_hid_layer=4, n_hid_dim=128)
+         n_couple_layer=4, n_hid_layer=5, n_hid_dim=256)
 
