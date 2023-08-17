@@ -18,32 +18,32 @@ def plot_trend_2(x1, y1, std1, x2, y2, std2):
     fig, ax1 = plt.subplots()
     ax2 = ax1.twinx()
 
-    # 绘制第一组数据
+    # Plot the first set of data
     ax1.plot(x1, y1, 'b-', label='Val.')
     ax1.set_xlabel('Sample Size')
     ax1.set_ylabel('Val. Acc', color='b')
     ax1.tick_params('y', colors='b')
 
-    # 设置第一组数据的y轴范围
+    # Set the y-axis range for the first set of data
     min_y1 = min(y1)
     max_y1 = max(y1)
     ax1.set_ylim(min_y1 - 0.001, max_y1 + 0.001)
 
-    # 绘制第二组数据
+    # Plot the second set of data
     ax2.plot(x2, y2, 'r-', label='Test')
     ax2.set_ylabel('Test Acc', color='r')
     ax2.tick_params('y', colors='r')
 
-    # 设置第二组数据的y轴范围
+    # Set the y-axis range for the second set of data
     min_y2 = min(y2)
     max_y2 = max(y2)
     ax2.set_ylim(min_y2 - 0.001, max_y2 + 0.001)
 
-    # 绘制标准差范围
+    # Plot the standard deviation range
     ax1.fill_between(x1, np.array(y1) - std1, np.array(y1) + std1, alpha=0.5, color='lightblue')
     ax2.fill_between(x2, np.array(y2) - std2, np.array(y2) + std2, alpha=0.5, color='lightpink')
 
-    # 添加图例
+    # Add legends
     lines, labels = ax1.get_legend_handles_labels()
     lines2, labels2 = ax2.get_legend_handles_labels()
     ax1.legend(lines + lines2, labels + labels2, loc='upper right')
